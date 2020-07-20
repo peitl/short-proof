@@ -61,7 +61,7 @@ def is_minimal(F):
     Warning: doesn't check whether the formula is UNSAT
     """
     max_var = maxvar(F.clauses)
-    clause_vars = list(range(max_var + 1, max_var + len(f.clauses) + 1))
+    clause_vars = list(range(max_var + 1, max_var + len(F.clauses) + 1))
     solver = Lingeling(bootstrap_with=[c + [-clause_vars[i]] for i, c in enumerate(F.clauses)])
     for i in range(len(F.clauses)):
         clause_vars[i] *= -1
@@ -648,7 +648,7 @@ def main():
     parser.add_argument("cnf",
             help="filename of the formula whose shortest proof is to be determined")
     parser.add_argument("--sat-solver",
-            help="specify which SAT solver to use", default="glucose", choices=[
+            help="specify which SAT solver to use", default="cadical", choices=[
                 "cadical",
                 "glucose",
                 "lingeling",
