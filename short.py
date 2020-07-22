@@ -104,13 +104,20 @@ def make_predicates(vp):
     def exarc(i, j):
         return vp.id(f"exarc[{i},{j}]")
 
-    # {pos|neg}carry[i,j,v] says that the variable v occurs positively in i and
+    # {pos|neg}carry[i,j,v] says that the variable v occurs {posi|nega}tively in i and
     # is carried over to j because of arc[i,j]
     def poscarry(i, j, v):
         return vp.id(f"poscarry[{i},{j},{v}]")
     def negcarry(i, j, v):
         return vp.id(f"negcarry[{i},{j},{v}]")
-    return pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry
+
+    # {pos|neg}drop[i,j,v] says that the variable v occurs {posi|nega}tively in i but
+    # does not occur in j anymore
+    def posdrop(i, j, v):
+        return vp.id(f"posdrop[{i},{j},{v}]")
+    def negdrop(i, j, v):
+        return vp.id(f"negdrop[{i},{j},{v}]")
+    return pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop
 
 def vartable(vp, n, m, s):
     vt = {}
@@ -140,7 +147,9 @@ def vartable(vp, n, m, s):
     return vt
 
 def reconstruct(model, n, m, s, vp):
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
+
     mset = set(model)
     for i in range(s):
         axioms = []
@@ -168,7 +177,8 @@ def definitions(F, n, m, s, is_mu, vp):
 
     variables = range(n)
     fset = [set(c) for c in F.clauses]
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
 
     definition_clauses = []
 
@@ -213,6 +223,18 @@ def definitions(F, n, m, s, is_mu, vp):
                     ]
                 ]
 
+    # definition of {pos|neg}drop
+    #definition_clauses += [c for i in range(s-1) for j in range(i+1, s) for v in variables
+    #                for c in [
+    #                    [-posdrop(i, j, v),  pos(i, v)],
+    #                    [-posdrop(i, j, v), -pos(j, v)],
+    #                    [ posdrop(i, j, v), -pos(i, v), pos(j, v)],
+    #                    [-negdrop(i, j, v),  neg(i, v)],
+    #                    [-negdrop(i, j, v), -neg(j, v)],
+    #                    [ negdrop(i, j, v), -neg(i, v), neg(j, v)]
+    #                ]
+    #            ]
+
     # set literals in axioms accordingly
     # this is optimized using the fact that axiom i appear no later
     # than as line i (if at all)
@@ -235,7 +257,8 @@ def definitions(F, n, m, s, is_mu, vp):
 def essentials(F, n, m, s, is_mu, vp):
 
     variables = range(n)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
 
     essential_clauses = []
 
@@ -290,7 +313,8 @@ def axiom_placement_clauses(F, n, m, s, is_mu, vp):
 
     variables = range(n)
     axioms = range(m)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
 
     # axioms appear in original order, without duplicates
     # axiom j cannot possibly appear later than as clause j
@@ -316,11 +340,20 @@ def axiom_placement_clauses(F, n, m, s, is_mu, vp):
 
 def redundancy(F, n, m, s, is_mu, vp, card_encoding):
 
+    variables = range(n)
+
     redundant_clauses = []
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
 
     # when successively incrementing s, we know that every clause must be used
     redundant_clauses += [[arc(i, j) for j in range(i+1, s)] for i in range(s-1)]
+
+    # in the same case, we know that no subsumed clause is ever derived
+    #redundant_clauses += [
+    #        [posdrop(i, j, v) for v in variables] +\
+    #        [negdrop(i, j, v) for v in variables]
+    #        for i in range(s-1) for j in range(i+1, s)]
 
     # resolvents have exactly two premises
     if is_mu:
@@ -360,7 +393,8 @@ def redundancy(F, n, m, s, is_mu, vp, card_encoding):
 
 def symmetry_breaking(F, n, m, s, is_mu, vp):
 
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
     variables = range(n)
 
     symbreak = []
@@ -480,7 +514,8 @@ def get_query(F, n, m, s, is_mu, card_encoding):
     axioms = range(m)
     proof_clauses = range(s)
 
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry = make_predicates(vp)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
 
     definition_clauses = definitions(F, n, m, s, is_mu, vp)
 
