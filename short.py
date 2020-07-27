@@ -9,6 +9,41 @@ import sys
 import math
 import argparse
 
+class Formula:
+    def __init__(self):
+        self.clauses = []
+        self.exivars = set()
+        self.univars = set()
+        # unideps maps u to existential variables left of u
+        self.unideps = {}
+        # uniblockers maps u to existential variables right of u
+        self.uniblockers = {}
+
+    def add_vars(self, newvars, vartype):
+        """
+        vartype in {"a", "e"}
+        """
+        if vartype == "a":
+            for v in newvars:
+                self.univars.add(v)
+                self.unideps[v] = set(self.exivars) # copy
+                self.uniblockers[v] = set()
+        else:
+            for v in newvars:
+                self.exivars.add(v)
+                for u in self.univars:
+                    self.uniblockers[u].add(v)
+
+    def add_clause(self, clause):
+        self.clauses.append(clause)
+        for lit in clause:
+            var = abs(lit)
+            if var not in self.exivars and var not in self.univars:
+                self.exivars.add(var)
+                for u in self.univars:
+                    self.unideps[u].add(var)
+
+
 def implies(preconditions, postconditions):
     """
     Returns a set of clauses that encode that the
@@ -18,8 +53,8 @@ def implies(preconditions, postconditions):
     neg_preconditions = [-x for x in preconditions]
     return [neg_preconditions + [x] for x in postconditions]
 
-def maxvar(F):
-    return max(max(abs(lit) for lit in clause) for clause in F)
+def maxvar(clauses):
+    return max(max(abs(lit) for lit in clause) for clause in clauses)
 
 def size(F):
     return sum(len(c) for c in F)
@@ -29,15 +64,38 @@ def print_formula(F):
     print("".join((" ".join(map(str, clause)) + " 0\n") for clause in F), end="")
 
 def draw_formula(F, padding="  "):
-    for cl in F:
+    for cl in F.clauses:
         print(padding, end="")
-        cl_string = [" "] * maxvar(F)
+        cl_string = [" "] * maxvar(F.clauses)
         for lit in cl:
             if lit < 0:
                 cl_string[abs(lit) - 1] = "-"
             else:
                 cl_string[abs(lit) - 1] = "+"
         print("".join(cl_string))
+
+def read_formula(filename):
+    """
+    Reads QDIMACS (and also DIMACS, which is a special case)
+    and returns the set of clauses and data structures that
+    represent the prefix.
+    """
+    F = Formula()
+    with open(filename) as f:
+        for line in f:
+            line = line.strip()
+            if len(line) == 0 or line[0] == "c":
+                continue
+            if line[0] == "p":
+                continue
+            if line[0] in {"a", "e"}:
+                F.add_vars(int(v) for i, v in enumerate(line.split()) if i > 0)
+            else:
+                F.add_clause(list(int(v) for v in line.split()[:-1]))
+    return F
+
+
+
 
 
 def verb_query_begin(s):
@@ -119,7 +177,13 @@ def make_predicates(vp):
         return vp.id(f"negdrop[{i},{j},{v}]")
     return pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop
 
-def vartable(vp, n, m, s):
+def vartable(F, s, vp):
+
+    variables = sorted(F.exivars | F.univars)
+    literals = variables + [-v for v in variables]
+    n = len(variables)
+    m = len(F.clauses)
+
     vt = {}
     pol_int = [-1, 1]
     pol_str = ["-", ""]
@@ -133,20 +197,23 @@ def vartable(vp, n, m, s):
     vt.update({pol_int[pol] * vp.id(f"{name}[{i}]"): f"{pol_str[pol]}{name}[{i}]"
         for name in names_cl for i in range(s) for pol in range(pol_num)})
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{v}]"):  f"{pol_str[pol]}{name}[{i},{v}]"
-        for name in names_cl_var for i in range(s) for v in range(n)      for pol in range(pol_num)})
+        for name in names_cl_var for i in range(s) for v in variables      for pol in range(pol_num)})
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j}]"):  f"{pol_str[pol]}{name}[{i},{j}]"
         for name in names_cl_ax  for i in range(s) for j in range(m)      for pol in range(pol_num)})
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j}]"):  f"{pol_str[pol]}{name}[{i},{j}]"
         for name in names_cl_cl  for i in range(s) for j in range(i+1, s) for pol in range(pol_num)})
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j},{v}]"):  f"{pol_str[pol]}{name}[{i},{j},{v}]"
         for name in names_cl_cl_var  for i in range(s) for j in range(i+1, s)
-        for v in range(n) for pol in range(pol_num)})
+        for v in variables for pol in range(pol_num)})
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j},{v}]"):  f"{pol_str[pol]}{name}[{i},{j},{v}]"
         for name in names_cl_cl_lit  for i in range(s) for j in range(i+1, s)
-        for v in range(2*n) for pol in range(pol_num)})
+        for v in literals for pol in range(pol_num)})
     return vt
 
-def reconstruct(model, n, m, s, vp):
+def reconstruct(model, F, s, vp):
+
+    variables = sorted(F.exivars | F.univars)
+    m = len(F.clauses)
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
@@ -155,11 +222,11 @@ def reconstruct(model, n, m, s, vp):
         axioms = []
         parents = []
         clause = []
-        for v in range(n):
+        for v in variables:
             if pos(i, v) in mset:
-                clause.append(v+1)
+                clause.append(v)
             if neg(i, v) in mset:
-                clause.append(-v-1)
+                clause.append(-v)
         if isax(i) in mset:
             for j in range(m):
                 if ax(i, j) in mset:
@@ -173,10 +240,12 @@ def reconstruct(model, n, m, s, vp):
         strents = f'res({", ".join(map(str,parents))})'
         print(f"{i+1:2d}: {strcl:<15}  {(strxioms if axioms else strents)}")
 
-def definitions(F, n, m, s, is_mu, vp):
+def definitions(F, s, is_mu, vp):
 
-    variables = range(n)
-    fset = [set(c) for c in F.clauses]
+    variables = sorted(F.exivars | F.univars)
+    n = len(variables)
+    m = len(F.clauses)
+    fset = [set(C) for C in F.clauses]
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
@@ -189,12 +258,12 @@ def definitions(F, n, m, s, is_mu, vp):
     # definition of carries
     definition_clauses += [c for i in range(s-1) for j in range(i+1, s) for v in variables
                     for c in [
-                        [-poscarry(i, j, v), pos(i, v)],
-                        [-poscarry(i, j, v), arc(i, j)],
-                        [poscarry(i, j, v), -pos(i, v), -arc(i, j)],
-                        [-negcarry(i, j, v), neg(i, v)],
-                        [-negcarry(i, j, v), arc(i, j)],
-                        [negcarry(i, j, v), -neg(i, v), -arc(i, j)]
+                        [-poscarry(i, j, v),  pos(i, v)],
+                        [-poscarry(i, j, v),  arc(i, j)],
+                        [ poscarry(i, j, v), -pos(i, v), -arc(i, j)],
+                        [-negcarry(i, j, v),  neg(i, v)],
+                        [-negcarry(i, j, v),  arc(i, j)],
+                        [ negcarry(i, j, v), -neg(i, v), -arc(i, j)]
                     ]
                 ]
 
@@ -241,10 +310,9 @@ def definitions(F, n, m, s, is_mu, vp):
     set_axioms = []
     for j, c in enumerate(fset):
         for v in variables:
-            w = v + 1
-            if -w in c:
+            if -v in c:
                 set_axioms.extend([-ax(i, j), neg(i, v)] for i in range(j+1))
-            elif w in c:
+            elif v in c:
                 set_axioms.extend([-ax(i, j), pos(i, v)] for i in range(j+1))
             else:
                 set_axioms.extend([-ax(i, j), -neg(i, v)] for i in range(j+1))
@@ -254,9 +322,11 @@ def definitions(F, n, m, s, is_mu, vp):
     return definition_clauses
 
 
-def essentials(F, n, m, s, is_mu, vp):
+def essentials(F, s, is_mu, vp):
 
-    variables = range(n)
+    variables = sorted(F.exivars | F.univars)
+    n = len(variables)
+    m = len(F.clauses)
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
@@ -309,9 +379,11 @@ def essentials(F, n, m, s, is_mu, vp):
 
     return essential_clauses
 
-def axiom_placement_clauses(F, n, m, s, is_mu, vp):
+def axiom_placement_clauses(F, s, is_mu, vp):
 
-    variables = range(n)
+    variables = sorted(F.exivars | F.univars)
+    n = len(variables)
+    m = len(F.clauses)
     axioms = range(m)
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
@@ -338,9 +410,11 @@ def axiom_placement_clauses(F, n, m, s, is_mu, vp):
 
     return axiom_placement
 
-def redundancy(F, n, m, s, is_mu, vp, card_encoding):
+def redundancy(F, s, is_mu, vp, card_encoding):
 
-    variables = range(n)
+    variables = sorted(F.exivars | F.univars)
+    n = len(variables)
+    m = len(F.clauses)
 
     redundant_clauses = []
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
@@ -391,52 +465,47 @@ def redundancy(F, n, m, s, is_mu, vp, card_encoding):
 
     return redundant_clauses
 
-def symmetry_breaking(F, n, m, s, is_mu, vp):
+def symmetry_breaking(F, s, is_mu, vp):
 
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
-    variables = range(n)
+    variables = sorted(F.exivars | F.univars)
+    lits = sorted(variables + [-v for v in variables], key=lambda lit: (abs(lit), -lit))
+    n = len(variables)
+    m = len(F.clauses)
 
     symbreak = []
 
     # lexicographic ordering of consecutive clauses
 
-    # eq[i,j,v] says that the clauses i and j are equal up to and including position v,
-    # where the v ranges from 0 to 2variables - 1, and the clauses are represented as
-    # vectors [pos[i][0], neg[i][0], pos[i][1], neg[i][1], pos[i][2], ...]
+    # eq[i,j,lit] says that the clauses i and j are equal up to and including position l,
+    # where l ranges over literals, and the clauses are represented as
+    # vectors [pos[i][abs(lits[0])], neg[i][abs(lits[0])], ...]
     def eq(i, j, v):
         return vp.id(f"eq[{i},{j},{v}]")
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
+    prd = pos if lits[0] > 0 else neg
+    v = abs(lits[0])
     symbreak += [c for i in range(s-1) for j in range(i+1, s) for c in [
-                [-eq(i, j, 0),  pos(i, 0), -pos(j, 0)],
-                [-eq(i, j, 0), -pos(i, 0),  pos(j, 0)],
-                [ eq(i, j, 0), -pos(i, 0), -pos(j, 0)],
-                [ eq(i, j, 0),  pos(i, 0),  pos(j, 0)],
-                [-eq(i, j, 1),   eq(i, j, 0)],
-                [-eq(i, j, 1),  neg(i, 0), -neg(j, 0)],
-                [-eq(i, j, 1), -neg(i, 0),  neg(j, 0)],
-                [ eq(i, j, 1), - eq(i, j, 0), -neg(i, 0), -neg(j, 0)],
-                [ eq(i, j, 1), - eq(i, j, 0),  neg(i, 0),  neg(j, 0)]
+                [-eq(i, j, lits[0]),  prd(i, v), -prd(j, v)],
+                [-eq(i, j, lits[0]), -prd(i, v),  prd(j, v)],
+                [ eq(i, j, lits[0]), -prd(i, v), -prd(j, v)],
+                [ eq(i, j, lits[0]),  prd(i, v),  prd(j, v)],
             ]
         ]
     for i in range(s-1):
         for j in range(i+1, s):
-            for v in range(1, n):
-                vpos = 2*v
-                vneg = 2*v + 1
+            for k in range(1, len(lits)):
+                prd = pos if lits[k] > 0 else neg
+                v = abs(lits[k])
                 symbreak.extend([
-                    [-eq(i, j, vpos),   eq(i, j,  vpos-1)],
-                    [-eq(i, j, vpos),  pos(i, v), -pos(j, v)],
-                    [-eq(i, j, vpos), -pos(i, v),  pos(j, v)],
-                    [ eq(i, j, vpos),  -eq(i, j,  vpos-1), -pos(i, v), -pos(j, v)],
-                    [ eq(i, j, vpos),  -eq(i, j,  vpos-1),  pos(i, v),  pos(j, v)],
-                    [-eq(i, j, vneg),   eq(i, j,  vneg-1)],
-                    [-eq(i, j, vneg),  neg(i, v), -neg(j, v)],
-                    [-eq(i, j, vneg), -neg(i, v),  neg(j, v)],
-                    [ eq(i, j, vneg),  -eq(i, j,  vneg-1), -neg(i, v), -neg(j, v)],
-                    [ eq(i, j, vneg),  -eq(i, j,  vneg-1),  neg(i, v),  neg(j, v)]
+                    [-eq(i, j, lits[k]),   eq(i, j,  lits[k-1])],
+                    [-eq(i, j, lits[k]),  prd(i, v), -prd(j, v)],
+                    [-eq(i, j, lits[k]), -prd(i, v),  prd(j, v)],
+                    [ eq(i, j, lits[k]),  -eq(i, j,  lits[k-1]), -prd(i, v), -prd(j, v)],
+                    [ eq(i, j, lits[k]),  -eq(i, j,  lits[k-1]),  prd(i, v),  prd(j, v)],
                 ])
 
     # simultaneous source property
@@ -463,28 +532,25 @@ def symmetry_breaking(F, n, m, s, is_mu, vp):
     for i in range(s-1):
         for j in range(i+1, s):
             symbreak.append([-sim(i, j), isax(i), pos(i, 0), -pos(j, 0)])
-            for v in variables:
-                vpos = 2*v
-                vneg = 2*v + 1
-                symbreak.append([-sim(i, j), isax(i), -eq(i, j, vpos), neg(i, v), -neg(j, v)])
-                if vneg < 2*n - 1:
-                    symbreak.append([-sim(i, j), isax(i), -eq(i, j, vneg), pos(i, v+1), -pos(j, v+1)])
-                else:
-                    symbreak.append([-eq(i, j, vneg)])
+            for k in range(len(lits) - 1):
+                prd = pos if lits[k] > 0 else neg
+                v = abs(lits[k])
+                symbreak.append([-sim(i, j), isax(i), -eq(i, j, lits[k]), prd(i, v), -prd(j, v)])
+            symbreak.append([-eq(i, j, lits[-1])])
 
     # only for variable-transitive formulas, such as PHP: last clause must always be unit, so
     # we fix the variable in that clause to be x_{n-1}, because those are the smallest clauses
     # in the lexicographic ordering
 
-    symbreak += [[pos(s-2, n-1), neg(s-2, n-1)]] +\
-            [[-pos(s-2, v)] for v in range(n - 1)] +\
-            [[-neg(s-2, v)] for v in range(n - 1)]
+    #symbreak += [[pos(s-2, variables[-1]), neg(s-2, variables[-1])]] +\
+    #        [[-pos(s-2, v)] for v in variables[:-1]] +\
+    #        [[-neg(s-2, v)] for v in variables[:-1]]
 
 
     return symbreak
 
 
-def get_query(F, n, m, s, is_mu, card_encoding):
+def get_query(F, s, is_mu, card_encoding):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -498,13 +564,9 @@ def get_query(F, n, m, s, is_mu, card_encoding):
     to recover the found proof.
     """
 
-    # we define the set of original variables here
-    # in fact, variables contains all original variables,
-    # but may contain more if there are gaps.
-    # It may be worth optimizing the size of variables later.
-    variables = list(range(n))
-    # variables are 0-indexed here, i.e. pos[i][0] means that
-    # the variable 1 occurs in the clause i
+    variables = sorted(F.exivars | F.univars)
+    n = len(variables)
+    m = len(F.clauses)
 
     vp = IDPool()
 
@@ -517,19 +579,19 @@ def get_query(F, n, m, s, is_mu, card_encoding):
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
-    definition_clauses = definitions(F, n, m, s, is_mu, vp)
+    definition_clauses = definitions(F, s, is_mu, vp)
 
-    essential_clauses = essentials(F, n, m, s, is_mu, vp)
+    essential_clauses = essentials(F, s, is_mu, vp)
 
     ############### REDUNDANCY ###############
 
-    redundant_clauses = redundancy(F, n, m, s, is_mu, vp, card_encoding)
+    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding)
 
     ############### SYMMETRY BREAKING ###############
 
-    axiom_placement = axiom_placement_clauses(F, n, m, s, is_mu, vp)
+    axiom_placement = axiom_placement_clauses(F, s, is_mu, vp)
 
-    symbreak = symmetry_breaking(F, n, m, s, is_mu, vp)
+    symbreak = symmetry_breaking(F, s, is_mu, vp)
 
     #all_clauses = def_isax + def_carries + def_pivot + def_uposneg + empty_clause + no_tautology +\
     #        retention_non_piv + non_introduction + resolvents_have_pivot + only_one_pivot +\
@@ -544,9 +606,7 @@ def get_query(F, n, m, s, is_mu, card_encoding):
 
     max_orig_var = maxvar(all_clauses)
     
-    all_clauses +=\
-            redundant_clauses +\
-            symbreak
+    all_clauses += redundant_clauses + symbreak
 
     return all_clauses, vp, max_orig_var
 
@@ -563,15 +623,12 @@ def has_short_proof(F, s, is_mu, options):
         #return min(len(c) for c in f.clauses) == 0
         return not all(f.clauses)
 
-    n = maxvar(F.clauses)
-    m = len(F.clauses)
-
     if options.verbosity >= 1:
         verb_query_begin(s)
 
     t_begin = clock()
 
-    query_clauses, vp, max_orig_var = get_query(F, n, m, s, is_mu, options.card)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card)
 
     t_end = clock()
 
@@ -594,7 +651,7 @@ def has_short_proof(F, s, is_mu, options):
             print( "--------------------------------------")
             print(f"  Proof of length {s} found:")
             print()
-            reconstruct(model, n, m, s, vp)
+            reconstruct(model, F, s, vp)
             print( "--------------------------------------")
 
     return ans
@@ -611,14 +668,11 @@ def count_short_proofs(F, s, is_mu, options):
         # if the matrix contains an empty clause
         return 1 if min(len(c) for c in f.clauses) == 0 else 0
 
-    n = maxvar(F.clauses)
-    m = len(F.clauses)
-
     if options.verbosity >= 1:
         verb_query_begin(s)
 
     t_begin = clock()
-    query_clauses, vp, max_orig_var = get_query(F, n, m, s, is_mu, options.card)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card)
     t_end = clock()
 
     if options.verbosity >= 1:
@@ -633,7 +687,7 @@ def count_short_proofs(F, s, is_mu, options):
 
     if options.verbosity >= 1:
         print(f"Max orig var: {max_orig_var}")
-    vt = vartable(vp, n, m, s)
+    vt = vartable(F, s, vp)
     #print(sorted(vt))
 
     while solver.solve():
@@ -661,7 +715,7 @@ def count_short_proofs(F, s, is_mu, options):
         else:
             #print(model)
             if options.verbosity >= 2:
-                reconstruct(model, n, m, s, vp)
+                reconstruct(model, F, s, vp)
         last_model = model
 
     return proofs
@@ -771,7 +825,8 @@ def main():
     elif options.sat_solver == "minisat":
         options.sat_solver = "minisat22"
 
-    F = CNF(from_file=options.cnf)
+    #F = CNF(from_file=options.cnf)
+    F = read_formula(options.cnf)
     if not is_unsat(F):
         print("ERROR: Input formula is satisfiable.", file=sys.stderr)
 
@@ -782,7 +837,7 @@ def main():
         is_mu = is_minimal(F)
 
     if options.query:
-        print_formula(get_query(F, maxvar(F.clauses), len(F.clauses), options.query,
+        print_formula(get_query(F, options.query,
             is_mu, options.card)[0])
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
