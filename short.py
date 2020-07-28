@@ -35,13 +35,22 @@ class Formula:
                     self.uniblockers[u].add(v)
 
     def add_clause(self, clause):
+
+        clause_vars = set(abs(lit) for lit in clause)
+
+        # universally reduce
+        clause = sorted(lit for lit in clause if
+                abs(lit) not in self.univars or
+                len(self.uniblockers[abs(lit)] & clause_vars) > 0)
+
         self.clauses.append(clause)
-        for lit in clause:
-            var = abs(lit)
-            if var not in self.exivars and var not in self.univars:
-                self.exivars.add(var)
-                for u in self.univars:
-                    self.unideps[u].add(var)
+
+        # quantify free variables in the outermost block
+        new_free_vars = clause_vars - self.exivars - self.univars
+        if new_free_vars:
+            self.exivars |= new_free_vars
+            for u in self.univars:
+                self.unideps[u] |= new_free_vars
 
 
 def implies(preconditions, postconditions):
@@ -89,9 +98,11 @@ def read_formula(filename):
             if line[0] == "p":
                 continue
             if line[0] in {"a", "e"}:
-                F.add_vars(int(v) for i, v in enumerate(line.split()) if i > 0)
+                linedata = list(map(int, line.split()[1:-1]))
+                F.add_vars(linedata, line[0])
             else:
-                F.add_clause(list(int(v) for v in line.split()[:-1]))
+                linedata = list(map(int, line.split()[:-1]))
+                F.add_clause(linedata)
     return F
 
 
@@ -156,6 +167,7 @@ def make_predicates(vp):
 
     # arc[i,j] says that clause j is a resolvent of clause i
     def arc(i, j):
+        #print(f"arc[{i},{j}]:{vp.id(f'arc[{i},{j}]')} ", file=sys.stderr)
         return vp.id(f"arc[{i},{j}]")
 
     # exarc[i,j] says that the arc from i to j is "extra", i.e. not the first outgoing arc from i
@@ -180,7 +192,7 @@ def make_predicates(vp):
 def vartable(F, s, vp):
 
     variables = sorted(F.exivars | F.univars)
-    literals = variables + [-v for v in variables]
+    lits = sorted(variables + [-v for v in variables], key=lambda lit: (abs(lit), -lit))
     n = len(variables)
     m = len(F.clauses)
 
@@ -205,9 +217,9 @@ def vartable(F, s, vp):
     vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j},{v}]"):  f"{pol_str[pol]}{name}[{i},{j},{v}]"
         for name in names_cl_cl_var  for i in range(s) for j in range(i+1, s)
         for v in variables for pol in range(pol_num)})
-    vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j},{v}]"):  f"{pol_str[pol]}{name}[{i},{j},{v}]"
+    vt.update({pol_int[pol] * vp.id(f"{name}[{i},{j},{l}]"):  f"{pol_str[pol]}{name}[{i},{j},{l}]"
         for name in names_cl_cl_lit  for i in range(s) for j in range(i+1, s)
-        for v in literals for pol in range(pol_num)})
+        for l in lits for pol in range(pol_num)})
     return vt
 
 def reconstruct(model, F, s, vp):
@@ -282,13 +294,13 @@ def definitions(F, s, is_mu, vp):
                 ]
 
     # definition of pivot
-    definition_clauses += [c for i in range(s) for v in variables
+    definition_clauses += [c for i in range(s) for x in F.exivars
                     for c in [
-                        [-piv(i, v), upos(i, v)],
-                        [-piv(i, v), uneg(i, v)],
-                        [-piv(i, v), -pos(i, v)],
-                        [-piv(i, v), -neg(i, v)],
-                        [-upos(i, v), -uneg(i, v), piv(i, v)]
+                        [-piv(i, x), upos(i, x)],
+                        [-piv(i, x), uneg(i, x)],
+                        [-piv(i, x), -pos(i, x)],
+                        [-piv(i, x), -neg(i, x)],
+                        [-upos(i, x), -uneg(i, x), piv(i, x)]
                     ]
                 ]
 
@@ -307,13 +319,18 @@ def definitions(F, s, is_mu, vp):
     # set literals in axioms accordingly
     # this is optimized using the fact that axiom i appear no later
     # than as line i (if at all)
+    # ! axioms are assumed to be universally reduced ! (done in add_clause)
     set_axioms = []
     for j, c in enumerate(fset):
         for v in variables:
             if -v in c:
                 set_axioms.extend([-ax(i, j), neg(i, v)] for i in range(j+1))
+                if v in F.univars:
+                    set_axioms.extend([-ax(i, j), -pos(i, v)] for i in range(j+1))
             elif v in c:
                 set_axioms.extend([-ax(i, j), pos(i, v)] for i in range(j+1))
+                if v in F.univars:
+                    set_axioms.extend([-ax(i, j), -neg(i, v)] for i in range(j+1))
             else:
                 set_axioms.extend([-ax(i, j), -neg(i, v)] for i in range(j+1))
                 set_axioms.extend([-ax(i, j), -pos(i, v)] for i in range(j+1))
@@ -322,7 +339,7 @@ def definitions(F, s, is_mu, vp):
     return definition_clauses
 
 
-def essentials(F, s, is_mu, vp):
+def essentials(F, s, is_mu, vp, ldq):
 
     variables = sorted(F.exivars | F.univars)
     n = len(variables)
@@ -342,36 +359,85 @@ def essentials(F, s, is_mu, vp):
     # here we define the resolution constraints via upos and uneg variables
     #######################################################################
 
-    # retention of non-pivot literals
-    essential_clauses += [c for i in range(2, s) for v in variables
+    # retention of non-pivot existential literals
+    essential_clauses += [c for i in range(2, s) for x in F.exivars
                     for c in [
-                        [piv(i, v), -upos(i, v), pos(i, v)],
-                        [piv(i, v), -uneg(i, v), neg(i, v)]
-                    ]
-                ]
-    
-    # non-introduction
-    essential_clauses += [c for i in range(2, s) for v in variables
-                    for c in [
-                        [isax(i), -pos(i, v), upos(i, v)],
-                        [isax(i), -neg(i, v), uneg(i, v)]
+                        [piv(i, x), -upos(i, x), pos(i, x)],
+                        [piv(i, x), -uneg(i, x), neg(i, x)]
                     ]
                 ]
 
-    # resolvents have a pivot
+    # retention of blocked universals
+    essential_clauses += [c for i in range(2, s) for u in F.univars for x in F.uniblockers[u]
+                    for c in [
+                        [-upos(i, u), pos(i, u), -pos(i, x)],
+                        [-upos(i, u), pos(i, u), -neg(i, x)],
+                        [-uneg(i, u), neg(i, u), -pos(i, x)],
+                        [-uneg(i, u), neg(i, u), -neg(i, x)]
+                    ]
+                ]
+    
     if is_mu:
         # we know exactly which lines are resolvents
-        essential_clauses += [[piv(i, v) for v in variables] for i in range(m, s)]
+
+        # resolvents have a pivot
+        essential_clauses += [[piv(i, x) for x in F.exivars] for i in range(m, s)]
+
+        # non-introduction
+        essential_clauses += [c for i in range(m, s) for v in variables
+                        for c in [
+                            [-pos(i, v), upos(i, v)],
+                            [-neg(i, v), uneg(i, v)]
+                        ]
+                    ]
+
     else:
-        essential_clauses += [[isax(i)] + [piv(i, v) for v in variables] for i in range(2, s)]
+        # resolvents have a pivot
+        essential_clauses += [[isax(i)] + [piv(i, x) for x in F.exivars] for i in range(2, s)]
+
+        # non-introduction
+        essential_clauses += [c for i in range(2, s) for v in variables
+                        for c in [
+                            [isax(i), -pos(i, v), upos(i, v)],
+                            [isax(i), -neg(i, v), uneg(i, v)]
+                        ]
+                    ]
 
     # at most one pivot
     # this cardinality constraint uses no auxiliary variables
     essential_clauses += [c for i in range(s)
-            for c in CardEnc.atmost([piv(i, v) for v in variables], encoding=EncType.pairwise).clauses]
+            for c in CardEnc.atmost([piv(i, x) for x in F.exivars], encoding=EncType.pairwise).clauses]
 
     # no variable occurs both positively and negatively in a clause
-    essential_clauses += [[-pos(i, v), -neg(i, v)] for i in range(s-1) for v in variables]
+    if not ldq:
+        essential_clauses += [[-pos(i, v), -neg(i, v)] for i in range(s-1) for v in variables]
+    else:
+        essential_clauses += [[-pos(i, x), -neg(i, x)] for i in range(s-1) for x in F.exivars]
+
+
+    # union of premises is non-tautological on universal variables
+    if not ldq:
+        essential_clauses += [[-upos(i, u), -uneg(i, u)] for i in range(s) for u in F.univars]
+    else:
+        essential_clauses += [
+                [-arc(i, k), -arc(j, k), -pos(i, u), -neg(j, u)] +
+                [piv(k, x) for x in F.unideps[u]]
+                    for k in range(2, s)
+                    for i in range(k)
+                    for j in range(k) if i != j
+                    for u in F.univars
+                ]
+
+    # clauses are universally reduced
+    essential_clauses += [C for i in range(s) for u in F.univars for C in
+            [
+                [-pos(i, u)] +\
+                    [pos(i, x) for x in F.uniblockers[u]] + [neg(i, x) for x in F.uniblockers[u]],
+                [-neg(i, u)] +\
+                    [pos(i, x) for x in F.uniblockers[u]] + [neg(i, x) for x in F.uniblockers[u]]
+            ]
+        ]
+
 
     # the last clause is empty
     essential_clauses += [[-pos(s-1, v)] for v in variables] +\
@@ -396,7 +462,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
     axiom_placement = []
     if is_mu:
         axiom_placement += [[ax(i, i)] for i in axioms] + [[-isax(i)] for i in range(m, s)]
-        axiom_placement += [[-piv(i, v)] for i in axioms for v in variables]
+        axiom_placement += [[-piv(i, x)] for i in axioms for x in F.exivars]
         axiom_placement += [[-upos(i, v)] for i in axioms for v in variables] +\
                            [[-uneg(i, v)] for i in axioms for v in variables]
     else:
@@ -404,7 +470,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
         axiom_placement += [[-ax(i, j)] for i in proof_clauses for j in range(min(i, m))]
         axiom_placement += [[-ax(i, j), -ax(i+1, jj)]
                 for i in range(s-1) for j in axioms for jj in range(j+1)]
-        axiom_placement += [[-isax(i), -piv(i, v)] for i in range(s-1) for v in variables]
+        axiom_placement += [[-isax(i), -piv(i, x)] for i in range(s-1) for x in F.exivars]
         axiom_placement += [[-isax(i), -upos(i, v)] for i in axioms for v in variables] +\
                            [[-isax(i), -uneg(i, v)] for i in axioms for v in variables]
 
@@ -431,13 +497,13 @@ def redundancy(F, s, is_mu, vp, card_encoding):
 
     # resolvents have exactly two premises
     if is_mu:
-        redundant_clauses += [card_clause for j in range(m, s) for card_clause in
+        redundant_clauses +=  [card_clause for j in range(max(m, 3), s) for card_clause in
                 CardEnc.equals([arc(i, j) for i in range(j)],
                     bound=2,
                     encoding=card_encoding,
                     vpool=vp).clauses]
     else:
-        redundant_clauses += [[isax(j)] + card_clause for j in range(2, s) for card_clause in
+        redundant_clauses += [[isax(j)] + card_clause for j in range(3, s) for card_clause in
                 CardEnc.equals([arc(i, j) for i in range(j)],
                     bound=2,
                     encoding=card_encoding,
@@ -450,15 +516,15 @@ def redundancy(F, s, is_mu, vp, card_encoding):
                         for j in range(i+1, s-1)
                             for k in range(j+1, s)]
             redundant_clauses += [[-exarc(i, j), arc(i, j)]
-                    for i in range(s-1)
-                        for j in range(i+1, s)]
+                    for i in range(s-2)
+                        for j in range(i+2, s)]
             redundant_clauses += [[-exarc(i, k)] + [arc(i, j) for j in range(i+1, k)]
-                        for i in range(s-1)
+                        for i in range(s-2)
                             for k in range(i+2, s)]
 
             # limit the number of extra arcs to s - 2m + 1
             redundant_clauses += CardEnc.atmost(
-                    [exarc(i, j) for i in range(s-1) for j in range(i+1, s)],
+                    [exarc(i, j) for i in range(s-2) for j in range(i+2, s)],
                     bound=s-2*m+1,
                     encoding=card_encoding,
                     vpool=vp).clauses
@@ -478,11 +544,11 @@ def symmetry_breaking(F, s, is_mu, vp):
 
     # lexicographic ordering of consecutive clauses
 
-    # eq[i,j,lit] says that the clauses i and j are equal up to and including position l,
+    # eq[i,j,l] says that the clauses i and j are equal up to and including position l,
     # where l ranges over literals, and the clauses are represented as
     # vectors [pos[i][abs(lits[0])], neg[i][abs(lits[0])], ...]
-    def eq(i, j, v):
-        return vp.id(f"eq[{i},{j},{v}]")
+    def eq(i, j, l):
+        return vp.id(f"eq[{i},{j},{l}]")
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
@@ -515,7 +581,7 @@ def symmetry_breaking(F, s, is_mu, vp):
         return vp.id(f"sim[{i},{j}]")
 
     symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(s-1)] +\
-                           [[-sim(i, i+1), -arc(i, i+1)] for i in range(s-1)]
+                [[-sim(i, i+1), -arc(i, i+1)] for i in range(s-1)]
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
@@ -529,9 +595,11 @@ def symmetry_breaking(F, s, is_mu, vp):
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
+    first_prd = pos if lits[0] > 0 else neg
+    first_v = abs(lits[0])
     for i in range(s-1):
         for j in range(i+1, s):
-            symbreak.append([-sim(i, j), isax(i), pos(i, 0), -pos(j, 0)])
+            symbreak.append([-sim(i, j), isax(i), first_prd(i, first_v), -first_prd(j, first_v)])
             for k in range(len(lits) - 1):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
@@ -550,7 +618,7 @@ def symmetry_breaking(F, s, is_mu, vp):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding):
+def get_query(F, s, is_mu, card_encoding, ldq):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -581,7 +649,7 @@ def get_query(F, s, is_mu, card_encoding):
 
     definition_clauses = definitions(F, s, is_mu, vp)
 
-    essential_clauses = essentials(F, s, is_mu, vp)
+    essential_clauses = essentials(F, s, is_mu, vp, ldq)
 
     ############### REDUNDANCY ###############
 
@@ -593,12 +661,6 @@ def get_query(F, s, is_mu, card_encoding):
 
     symbreak = symmetry_breaking(F, s, is_mu, vp)
 
-    #all_clauses = def_isax + def_carries + def_pivot + def_uposneg + empty_clause + no_tautology +\
-    #        retention_non_piv + non_introduction + resolvents_have_pivot + only_one_pivot +\
-    #        set_axioms + axioms_no_premises + axioms_no_pivot + axioms_no_uposneg +\
-    #        proof_start_axioms + axioms_in_front + axioms_order + axiom_placement + every_clause_used +\
-    #        equality + lex + simultaneous_sources
-
     all_clauses =\
             definition_clauses +\
             essential_clauses +\
@@ -607,6 +669,13 @@ def get_query(F, s, is_mu, card_encoding):
     max_orig_var = maxvar(all_clauses)
     
     all_clauses += redundant_clauses + symbreak
+
+    #max_var = maxvar(all_clauses)
+    #print(max_var, file=sys.stderr)
+    #print(max_orig_var, file=sys.stderr)
+    #vt = vartable(F, s, vp)
+    #for v in range(1, max_orig_var+1):
+    #    print(f"{v}: {vt[v]}", file=sys.stderr)
 
     return all_clauses, vp, max_orig_var
 
@@ -628,7 +697,7 @@ def has_short_proof(F, s, is_mu, options):
 
     t_begin = clock()
 
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card, options.ldq)
 
     t_end = clock()
 
@@ -798,6 +867,9 @@ def main():
     parser.add_argument("--count",
             type=int,
             help="count the number of shortest proofs")
+    parser.add_argument("--ldq",
+            action="store_true",
+            help="search for long-distance Q-resolution proofs")
     mu_group.add_argument("--mu",
             action="store_true",
             help="skip the minimal unsatisfiability check and assume the formula is MU")
@@ -827,18 +899,19 @@ def main():
 
     #F = CNF(from_file=options.cnf)
     F = read_formula(options.cnf)
-    if not is_unsat(F):
-        print("ERROR: Input formula is satisfiable.", file=sys.stderr)
 
     is_mu = False
     if options.mu:
         is_mu = True
     elif not options.not_mu:
+        if not is_unsat(F):
+            print("ERROR: Input formula is satisfiable.", file=sys.stderr)
+            sys.exit(-1)
         is_mu = is_minimal(F)
 
+
     if options.query:
-        print_formula(get_query(F, options.query,
-            is_mu, options.card)[0])
+        print_formula(get_query(F, options.query, is_mu, options.card, options.ldq)[0])
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
