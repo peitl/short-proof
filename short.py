@@ -34,14 +34,15 @@ class Formula:
                 for u in self.univars:
                     self.uniblockers[u].add(v)
 
-    def add_clause(self, clause):
+    def add_clause(self, clause, reductionless=False):
 
         clause_vars = set(abs(lit) for lit in clause)
 
         # universally reduce
-        clause = sorted(lit for lit in clause if
-                abs(lit) not in self.univars or
-                len(self.uniblockers[abs(lit)] & clause_vars) > 0)
+        if not reductionless:
+            clause = sorted(lit for lit in clause if
+                    abs(lit) not in self.univars or
+                    len(self.uniblockers[abs(lit)] & clause_vars) > 0)
 
         self.clauses.append(clause)
 
@@ -83,7 +84,7 @@ def draw_formula(F, padding="  "):
                 cl_string[abs(lit) - 1] = "+"
         print("".join(cl_string))
 
-def read_formula(filename):
+def read_formula(filename, reductionless):
     """
     Reads QDIMACS (and also DIMACS, which is a special case)
     and returns the set of clauses and data structures that
@@ -102,7 +103,7 @@ def read_formula(filename):
                 F.add_vars(linedata, line[0])
             else:
                 linedata = list(map(int, line.split()[:-1]))
-                F.add_clause(linedata)
+                F.add_clause(linedata, reductionless)
     return F
 
 
@@ -870,6 +871,9 @@ def main():
     parser.add_argument("--ldq",
             action="store_true",
             help="search for long-distance Q-resolution proofs")
+    parser.add_argument("--reductionless",
+            action="store_true",
+            help="disallow intermediate universal reductions in the proof (needs --ldq to be complete)")
     mu_group.add_argument("--mu",
             action="store_true",
             help="skip the minimal unsatisfiability check and assume the formula is MU")
@@ -898,7 +902,16 @@ def main():
         options.sat_solver = "minisat22"
 
     #F = CNF(from_file=options.cnf)
-    F = read_formula(options.cnf)
+    F = read_formula(options.cnf, options.reductionless)
+
+    # instead of changing the constraints, we implement reductionless
+    # long-distance Q-resolution simply by saying that all existential
+    # variables block every universal variable, and hence reduction is
+    # only possible at the end. Notice that for merging, we use F.unideps,
+    # which is left unchanged, and so illegal merges are detected correctly.
+    if options.reductionless:
+        for u in F.univars:
+            F.uniblockers[u] = F.exivars
 
     is_mu = False
     if options.mu:
