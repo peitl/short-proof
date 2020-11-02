@@ -3,11 +3,13 @@
 from pysat.card import CardEnc, EncType
 from pysat.formula import CNF, IDPool
 from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
-from time import clock
+from time import perf_counter
 
 import sys
 import math
 import argparse
+
+machine_summary = ""
 
 class Formula:
     def __init__(self):
@@ -696,11 +698,11 @@ def has_short_proof(F, s, is_mu, options):
     if options.verbosity >= 1:
         verb_query_begin(s)
 
-    t_begin = clock()
+    t_begin = perf_counter()
 
     query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card, options.ldq)
 
-    t_end = clock()
+    t_end = perf_counter()
 
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
@@ -708,9 +710,9 @@ def has_short_proof(F, s, is_mu, options):
     solver = Solver(name=options.sat_solver, bootstrap_with=query_clauses)
     del query_clauses
 
-    t_begin = clock()
+    t_begin = perf_counter()
     ans = solver.solve()
-    t_end = clock()
+    t_end = perf_counter()
     if options.verbosity >= 1:
         print(f"* Solved. ({t_end-t_begin:.5g} sec)")
         sys.stdout.flush()
@@ -741,9 +743,9 @@ def count_short_proofs(F, s, is_mu, options):
     if options.verbosity >= 1:
         verb_query_begin(s)
 
-    t_begin = clock()
+    t_begin = perf_counter()
     query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card)
-    t_end = clock()
+    t_end = perf_counter()
 
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
@@ -751,7 +753,7 @@ def count_short_proofs(F, s, is_mu, options):
     solver = Solver(name=options.sat_solver, bootstrap_with=query_clauses)
     del query_clauses
 
-    t = clock()
+    t = perf_counter()
     proofs = 0
     last_model = None
 
@@ -797,7 +799,9 @@ def find_shortest_proof(F, is_mu, options):
     to has_short_proof determines the shortest proof that f has.
     """
 
-    t_begin = clock()
+    global machine_summary
+
+    t_begin = perf_counter()
 
     print( "--------------------------------------")
     print( "* Finding shortest proof")
@@ -826,9 +830,12 @@ def find_shortest_proof(F, is_mu, options):
             print("--------------------------------------")
         s += 1
 
-    t_end = clock()
+    t_end = perf_counter()
     print(f"* Time: {t_end - t_begin}")
     print(f"* Shortest proof found: {s}")
+
+    # update machine-readable summary
+    machine_summary += f",{s},{t_end-t_begin}"
     return s
 
 
@@ -840,6 +847,8 @@ def main():
         print("You appear to be running version %d.%d."
                 % (sys.version_info.major, sys.version_info.major))
         sys.exit(36)
+
+    global machine_summary
 
     parser = argparse.ArgumentParser()
     mu_group = parser.add_mutually_exclusive_group()
@@ -903,6 +912,7 @@ def main():
 
     #F = CNF(from_file=options.cnf)
     F = read_formula(options.cnf, options.reductionless)
+    machine_summary += f"{options.cnf},{len(F.exivars) + len(F.univars)},{len(F.clauses)},{sum(len(cl) for cl in F.clauses)},graph6"
 
     # instead of changing the constraints, we implement reductionless
     # long-distance Q-resolution simply by saying that all existential
@@ -929,6 +939,7 @@ def main():
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
         shortest = find_shortest_proof(F, is_mu, options)
+        print(machine_summary)
         sys.exit(shortest)
 
 if __name__ == "__main__":
