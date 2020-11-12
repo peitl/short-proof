@@ -700,7 +700,7 @@ def has_short_proof(F, s, is_mu, options):
 
     t_begin = perf_counter()
 
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card, options.ldq)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum, options.ldq)
 
     t_end = perf_counter()
 
@@ -744,7 +744,7 @@ def count_short_proofs(F, s, is_mu, options):
         verb_query_begin(s)
 
     t_begin = perf_counter()
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.card)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum)
     t_end = perf_counter()
 
     if options.verbosity >= 1:
@@ -896,7 +896,7 @@ def main():
 
     options = parser.parse_args()
 
-    options.card = {
+    options.cardnum = {
             "seqcounter"  : EncType.seqcounter,
             "sortnetwrk"  : EncType.sortnetwrk,
             "cardnetwrk"  : EncType.sortnetwrk,
@@ -934,7 +934,7 @@ def main():
 
 
     if options.query:
-        print_formula(get_query(F, options.query, is_mu, options.card, options.ldq)[0])
+        print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq)[0])
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
