@@ -547,21 +547,18 @@ def symmetry_breaking(F, s, is_mu, vp):
 
     # lexicographic ordering of consecutive clauses
 
-    # eq[i,j,l] says that the clauses i and j are equal up to and including position l,
-    # where l ranges over literals, and the clauses are represented as
-    # vectors [pos[i][abs(lits[0])], neg[i][abs(lits[0])], ...]
-    def eq(i, j, l):
-        return vp.id(f"eq[{i},{j},{l}]")
 
-    # ϴ(s^2·n) clauses
-    # ϴ(s^2·n) literals
+    # geq[i,j,l] says that all literals up to and including position l,
+    # are greater than or equal in clause j than in clause i
+    def geq(i, j, l):
+        return vp.id(f"geq[{i},{j},{l}]")
+
     prd = pos if lits[0] > 0 else neg
     v = abs(lits[0])
     symbreak += [c for i in range(s-1) for j in range(i+1, s) for c in [
-                [-eq(i, j, lits[0]),  prd(i, v), -prd(j, v)],
-                [-eq(i, j, lits[0]), -prd(i, v),  prd(j, v)],
-                [ eq(i, j, lits[0]), -prd(i, v), -prd(j, v)],
-                [ eq(i, j, lits[0]),  prd(i, v),  prd(j, v)],
+                [-geq(i, j, lits[0]), -prd(i, v), prd(j, v)],
+                [ geq(i, j, lits[0]), -prd(j, v)],
+                [ geq(i, j, lits[0]),  prd(i, v)],
             ]
         ]
     for i in range(s-1):
@@ -570,11 +567,10 @@ def symmetry_breaking(F, s, is_mu, vp):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
                 symbreak.extend([
-                    [-eq(i, j, lits[k]),   eq(i, j,  lits[k-1])],
-                    [-eq(i, j, lits[k]),  prd(i, v), -prd(j, v)],
-                    [-eq(i, j, lits[k]), -prd(i, v),  prd(j, v)],
-                    [ eq(i, j, lits[k]),  -eq(i, j,  lits[k-1]), -prd(i, v), -prd(j, v)],
-                    [ eq(i, j, lits[k]),  -eq(i, j,  lits[k-1]),  prd(i, v),  prd(j, v)],
+                    [-geq(i, j, lits[k]),  geq(i, j,  lits[k-1])],
+                    [-geq(i, j, lits[k]), -prd(i, v),  prd(j, v)],
+                    [ geq(i, j, lits[k]), -geq(i, j,  lits[k-1]), -prd(j, v)],
+                    [ geq(i, j, lits[k]), -geq(i, j,  lits[k-1]),  prd(i, v)],
                 ])
 
     # simultaneous source property
@@ -606,8 +602,8 @@ def symmetry_breaking(F, s, is_mu, vp):
             for k in range(len(lits) - 1):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
-                symbreak.append([-sim(i, j), isax(i), -eq(i, j, lits[k]), prd(i, v), -prd(j, v)])
-            symbreak.append([-eq(i, j, lits[-1])])
+                symbreak.append([-sim(i, j), isax(i), -geq(i, j, lits[k]), prd(i, v), -prd(j, v)])
+            symbreak.append([-geq(i, j, lits[-1])])
 
     # only for variable-transitive formulas, such as PHP: last clause must always be unit, so
     # we fix the variable in that clause to be x_{n-1}, because those are the smallest clauses
