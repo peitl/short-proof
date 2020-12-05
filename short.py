@@ -3,11 +3,13 @@
 from pysat.card import CardEnc, EncType
 from pysat.formula import CNF, IDPool
 from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
-from time import perf_counter
+from time import perf_counter, time
+from random import shuffle
 
 import sys
 import math
 import argparse
+import subprocess
 
 machine_summary = ""
 
@@ -55,6 +57,49 @@ class Formula:
             for u in self.univars:
                 self.unideps[u] |= new_free_vars
 
+class SolverWrapper:
+    internal_solvers = {
+            "cadical",
+            "glucose",
+            "lingeling",
+            "maplesat",
+            "minisat"}
+
+    def __init__(self, solver_name, clauses, cnf, query):
+        self.solver_name = solver_name
+        self.clauses = clauses
+        self.model = []
+        if self.solver_name in self.internal_solvers:
+            solver = Solver(name=self.solver_name, bootstrap_with=self.clauses)
+        else:
+            # write the clauses into a temporary CNF file, then
+            # call  solver_name  as a subprocess,
+            # capture output and read the model
+            self.tmp_query_file = cnf + f".has_{query}_{time()}.cnf"
+            write_formula(self.clauses, self.tmp_query_file)
+
+    def solve(self):
+        if self.solver_name in self.internal_solvers:
+            t_begin = perf_counter()
+            self.ans = solver.solve()
+            t_end = perf_counter()
+            self.time = t_end - t_begin
+            if self.ans:
+                self.model = solver.get_model()
+        else:
+            t_begin = perf_counter()
+            output = subprocess.run([self.solver_name, "-q", self.tmp_query_file], capture_output=True)
+            t_end = perf_counter()
+            self.time = t_end - t_begin
+            self.ans = output.returncode == 10
+            if self.ans:
+                outlines = output.stdout.decode().split("\n")
+                for line in outlines:
+                    if len(line) > 0 and line[0] == "v":
+                        self.model += [int(lit) for lit in line.split() if lit != "v"]
+
+
+
 
 def implies(preconditions, postconditions):
     """
@@ -70,6 +115,12 @@ def maxvar(clauses):
 
 def size(F):
     return sum(len(c) for c in F)
+
+def write_formula(F, filename):
+    with open(filename, "w") as f:
+        print(f"p cnf {maxvar(F)} {len(F)}", file=f)
+        print("".join((" ".join(map(str, clause)) + " 0\n") for clause in F), end="", file=f)
+
 
 def print_formula(F):
     print(f"p cnf {maxvar(F)} {len(F)}")
@@ -532,6 +583,16 @@ def redundancy(F, s, is_mu, vp, card_encoding):
                     encoding=card_encoding,
                     vpool=vp).clauses
 
+    # each variable must be a pivot at least once
+    # if v is the pivot in j and i is a premise, then v appears in i (pos or neg)
+    #if is_mu:
+    #    redundant_clauses += [[piv(i, v) for i in range(m, s)] for v in F.exivars]
+    #    redundant_clauses += [[-arc(i, j), -piv(j, v), pos(i, v), neg(i, v)] for j in range(m, s) for i in range(j) for v in F.exivars]
+    #    pass
+    #else:
+    #    redundant_clauses += [[piv(i, v) for i in range(2, s)] for v in F.exivars]
+    #    pass
+
     return redundant_clauses
 
 def symmetry_breaking(F, s, is_mu, vp):
@@ -703,26 +764,23 @@ def has_short_proof(F, s, is_mu, options):
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
     
-    solver = Solver(name=options.sat_solver, bootstrap_with=query_clauses)
+    solver_wrapper = SolverWrapper(options.sat_solver, query_clauses, options.cnf, s)
     del query_clauses
 
-    t_begin = perf_counter()
-    ans = solver.solve()
-    t_end = perf_counter()
+    solver_wrapper.solve()
     if options.verbosity >= 1:
-        print(f"* Solved. ({t_end-t_begin:.5g} sec)")
+        print(f"* Solved. ({solver_wrapper.time:.5g} sec)")
         sys.stdout.flush()
 
-    if ans:
-        model = solver.get_model()
+    if solver_wrapper.ans:
         if options.verbosity >= 1:
             print( "--------------------------------------")
             print(f"  Proof of length {s} found:")
             print()
-            reconstruct(model, F, s, vp)
+            reconstruct(solver_wrapper.model, F, s, vp)
             print( "--------------------------------------")
 
-    return ans
+    return solver_wrapper.ans
 
 def count_short_proofs(F, s, is_mu, options):
     """
@@ -852,12 +910,8 @@ def main():
     parser.add_argument("cnf",
             help="filename of the formula whose shortest proof is to be determined")
     parser.add_argument("--sat-solver",
-            help="specify which SAT solver to use", default="cadical", choices=[
-                "cadical",
-                "glucose",
-                "lingeling",
-                "maplesat",
-                "minisat"])
+            help="specify which SAT solver to use", default="cadical"#, choices=["cadical", "glucose", "lingeling", "maplesat", "minisat"]
+            ) #TODO: check whether an external solver is a valid executable?
     parser.add_argument("--query",
             type=int,
             help="don't compute the shortest proof, only display the query formula")
