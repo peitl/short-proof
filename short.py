@@ -60,17 +60,17 @@ class Formula:
 class SolverWrapper:
     internal_solvers = {
             "cadical",
-            "glucose",
+            "glucose4",
             "lingeling",
             "maplesat",
-            "minisat"}
+            "minisat22"}
 
     def __init__(self, solver_name, clauses, cnf, query):
         self.solver_name = solver_name
         self.clauses = clauses
         self.model = []
         if self.solver_name in self.internal_solvers:
-            solver = Solver(name=self.solver_name, bootstrap_with=self.clauses)
+            self.solver = Solver(name=self.solver_name, bootstrap_with=self.clauses)
         else:
             # write the clauses into a temporary CNF file, then
             # call  solver_name  as a subprocess,
@@ -81,11 +81,11 @@ class SolverWrapper:
     def solve(self):
         if self.solver_name in self.internal_solvers:
             t_begin = perf_counter()
-            self.ans = solver.solve()
+            self.ans = self.solver.solve()
             t_end = perf_counter()
             self.time = t_end - t_begin
             if self.ans:
-                self.model = solver.get_model()
+                self.model = self.solver.get_model()
         else:
             t_begin = perf_counter()
             output = subprocess.run([self.solver_name, "-q", self.tmp_query_file], capture_output=True)
@@ -608,6 +608,16 @@ def symmetry_breaking(F, s, is_mu, vp):
 
     # lexicographic ordering of consecutive clauses
 
+    # if the formula is mu, we know where the axioms are
+    istart = m if is_mu else 2
+    if is_mu:
+        def isax_mu(i):
+            return []
+    else:
+        def isax_mu(i):
+            return [isax(i)]
+
+
 
     # geq[i,j,l] says that all literals up to and including position l,
     # are greater than or equal in clause j than in clause i
@@ -616,13 +626,13 @@ def symmetry_breaking(F, s, is_mu, vp):
 
     prd = pos if lits[0] > 0 else neg
     v = abs(lits[0])
-    symbreak += [c for i in range(s-1) for j in range(i+1, s) for c in [
+    symbreak += [c for i in range(istart, s-1) for j in range(i+1, s) for c in [
                 [-geq(i, j, lits[0]), -prd(i, v), prd(j, v)],
                 [ geq(i, j, lits[0]), -prd(j, v)],
                 [ geq(i, j, lits[0]),  prd(i, v)],
             ]
         ]
-    for i in range(s-1):
+    for i in range(istart, s-1):
         for j in range(i+1, s):
             for k in range(1, len(lits)):
                 prd = pos if lits[k] > 0 else neg
@@ -640,12 +650,12 @@ def symmetry_breaking(F, s, is_mu, vp):
     def sim(i, j):
         return vp.id(f"sim[{i},{j}]")
 
-    symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(s-1)] +\
-                [[-sim(i, i+1), -arc(i, i+1)] for i in range(s-1)]
+    symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(istart, s-1)] +\
+                [[-sim(i, i+1), -arc(i, i+1)] for i in range(istart, s-1)]
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
-    for i in range(s-2):
+    for i in range(istart, s-2):
         for j in range(i+2, s):
             symbreak += [
                     [-sim(i, j),  sim(i+1, j)],
@@ -657,13 +667,13 @@ def symmetry_breaking(F, s, is_mu, vp):
     # ϴ(s^2·n) literals
     first_prd = pos if lits[0] > 0 else neg
     first_v = abs(lits[0])
-    for i in range(s-1):
+    for i in range(istart, s-1):
         for j in range(i+1, s):
-            symbreak.append([-sim(i, j), isax(i), first_prd(i, first_v), -first_prd(j, first_v)])
+            symbreak.append(isax_mu(i) + [-sim(i, j), first_prd(i, first_v), -first_prd(j, first_v)])
             for k in range(len(lits) - 1):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
-                symbreak.append([-sim(i, j), isax(i), -geq(i, j, lits[k]), prd(i, v), -prd(j, v)])
+                symbreak.append(isax_mu(i) + [-sim(i, j), -geq(i, j, lits[k]), prd(i, v), -prd(j, v)])
             symbreak.append([-geq(i, j, lits[-1])])
 
     # only for variable-transitive formulas, such as PHP: last clause must always be unit, so
@@ -737,7 +747,9 @@ def get_query(F, s, is_mu, card_encoding, ldq):
     #for v in range(1, max_orig_var+1):
     #    print(f"{v}: {vt[v]}", file=sys.stderr)
 
-    return all_clauses, vp, max_orig_var
+    cubes = []
+
+    return all_clauses, vp, max_orig_var#, cubes
 
 def has_short_proof(F, s, is_mu, options):
     """
