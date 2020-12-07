@@ -624,12 +624,25 @@ def symmetry_breaking(F, s, is_mu, vp):
     def geq(i, j, l):
         return vp.id(f"geq[{i},{j},{l}]")
 
+    def geq_upto(i, j, l):
+        return vp.id(f"geq_upto[{i},{j},{l}]")
+
+    for i in range(istart, s-1):
+        for j in range(i+1, s):
+            for k in range(0, len(lits)):
+                prd = pos if lits[k] > 0 else neg
+                v = abs(lits[k])
+                symbreak.extend([
+                    [-geq(i, j, lits[k]), -prd(i, v),  prd(j, v)],
+                    [ geq(i, j, lits[k]), -prd(j, v)],
+                    [ geq(i, j, lits[k]),  prd(i, v)],
+                ])
+
     prd = pos if lits[0] > 0 else neg
     v = abs(lits[0])
     symbreak += [c for i in range(istart, s-1) for j in range(i+1, s) for c in [
-                [-geq(i, j, lits[0]), -prd(i, v), prd(j, v)],
-                [ geq(i, j, lits[0]), -prd(j, v)],
-                [ geq(i, j, lits[0]),  prd(i, v)],
+                [-geq_upto(i, j, lits[0]),  geq(i, j, lits[0])],
+                [ geq_upto(i, j, lits[0]), -geq(i, j, lits[0])]
             ]
         ]
     for i in range(istart, s-1):
@@ -638,10 +651,9 @@ def symmetry_breaking(F, s, is_mu, vp):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
                 symbreak.extend([
-                    [-geq(i, j, lits[k]),  geq(i, j,  lits[k-1])],
-                    [-geq(i, j, lits[k]), -prd(i, v),  prd(j, v)],
-                    [ geq(i, j, lits[k]), -geq(i, j,  lits[k-1]), -prd(j, v)],
-                    [ geq(i, j, lits[k]), -geq(i, j,  lits[k-1]),  prd(i, v)],
+                    [-geq_upto(i, j, lits[k]),  geq_upto(i, j,  lits[k-1])],
+                    [-geq_upto(i, j, lits[k]),  geq(i, j, lits[k])],
+                    [ geq_upto(i, j, lits[k]), -geq_upto(i, j,  lits[k-1]), -geq(i, j, lits[k])]
                 ])
 
     # simultaneous source property
@@ -673,8 +685,8 @@ def symmetry_breaking(F, s, is_mu, vp):
             for k in range(len(lits) - 1):
                 prd = pos if lits[k] > 0 else neg
                 v = abs(lits[k])
-                symbreak.append(isax_mu(i) + [-sim(i, j), -geq(i, j, lits[k]), prd(i, v), -prd(j, v)])
-            symbreak.append([-geq(i, j, lits[-1])])
+                symbreak.append(isax_mu(i) + [-sim(i, j), -geq_upto(i, j, lits[k]), prd(i, v), -prd(j, v)])
+            symbreak.append([-geq_upto(i, j, lits[-1])])
 
     # only for variable-transitive formulas, such as PHP: last clause must always be unit, so
     # we fix the variable in that clause to be x_{n-1}, because those are the smallest clauses
