@@ -64,6 +64,10 @@ class SolverWrapper:
             "lingeling",
             "maplesat",
             "minisat22"}
+    verbosity_args = {
+            "kissat" : ["-q"],
+            "cryptominisat5" : ["--verb", "0"]
+            }
 
     def __init__(self, solver_name, clauses, cnf, query):
         self.solver_name = solver_name
@@ -88,7 +92,7 @@ class SolverWrapper:
                 self.model = self.solver.get_model()
         else:
             t_begin = perf_counter()
-            output = subprocess.run([self.solver_name, "-q", self.tmp_query_file], capture_output=True)
+            output = subprocess.run([self.solver_name] + self.verbosity_args.get(self.solver_name, []) + [self.tmp_query_file], capture_output=True)
             t_end = perf_counter()
             self.time = t_end - t_begin
             self.ans = output.returncode == 10
