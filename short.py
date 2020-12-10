@@ -115,7 +115,7 @@ def implies(preconditions, postconditions):
     return [neg_preconditions + [x] for x in postconditions]
 
 def maxvar(clauses):
-    return max(max(abs(lit) for lit in clause) for clause in clauses)
+    return max([0] + [max(abs(lit) for lit in clause) for clause in clauses if len(clause) > 0])
 
 def size(F):
     return sum(len(c) for c in F)
@@ -778,7 +778,7 @@ def has_short_proof(F, s, is_mu, options):
         # the only way there can be such a short proof is
         # if the matrix contains the empty clause
         #return min(len(c) for c in f.clauses) == 0
-        return not all(f.clauses)
+        return not all(F.clauses)
 
     if options.verbosity >= 1:
         verb_query_begin(s)
