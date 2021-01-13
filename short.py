@@ -66,7 +66,8 @@ class SolverWrapper:
             "minisat22"}
     verbosity_args = {
             "kissat" : ["-q"],
-            "cryptominisat5" : ["--verb", "0"]
+            "cryptominisat5" : ["--verb", "0"],
+            "cryptominisat" : ["--verb", "0"]
             }
 
     def __init__(self, solver_name, clauses, cnf, query):
@@ -938,7 +939,7 @@ def main():
     parser.add_argument("cnf",
             help="filename of the formula whose shortest proof is to be determined")
     parser.add_argument("--sat-solver",
-            help="specify which SAT solver to use", default="cadical"#, choices=["cadical", "glucose", "lingeling", "maplesat", "minisat"]
+            help="specify which SAT solver to use. Valid choices are cadical, glucose, lingeling, maplesat, minisat for solvers provided by PySAT, or the name of the executable of any other SAT solver installed", default="cadical"#, choices=["cadical", "glucose", "lingeling", "maplesat", "minisat"]
             ) #TODO: check whether an external solver is a valid executable?
     parser.add_argument("--query",
             type=int,
