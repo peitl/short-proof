@@ -600,6 +600,100 @@ def redundancy(F, s, is_mu, vp, card_encoding):
 
     return redundant_clauses
 
+def symmetry_breaking_v(F, s, is_mu, vp):
+
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
+    variables = sorted(F.exivars | F.univars)
+    lits = sorted(variables + [-v for v in variables], key=lambda lit: (abs(lit), -lit))
+    n = len(variables)
+    m = len(F.clauses)
+
+    symbreak = []
+
+    # lexicographic ordering of consecutive clauses
+
+    # if the formula is mu, we know where the axioms are
+    istart = m if is_mu else 2
+    if is_mu:
+        def isax_mu(i):
+            return []
+    else:
+        def isax_mu(i):
+            return [isax(i)]
+
+
+    # we will use the fact that clauses are non-tautological
+    # and model them as vectors of {0, 1, 2} indexed by variables
+    # positive occurrence = 2
+    # negative occurrence = 1
+    #       no occurrence = 0
+
+    def leq(i, j, v):
+        return vp.id(f"leq[{i},{j},{v}]")
+
+    def leq_upto(i, j, l):
+        return vp.id(f"leq_upto[{i},{j},{v}]")
+
+    for i in range(istart, s-1):
+        for j in range(i+1, s):
+            for v in variables:
+                #prd = pos if lits[k] > 0 else neg
+                #v = abs(lits[k])
+                symbreak.extend([
+                    [-leq(i, j, v), -pos(i, v),  pos(j, v)],
+                    [-leq(i, j, v), -neg(i, v),  neg(j, v), pos(j, v)],
+                    [ leq(i, j, v), -pos(j, v)],
+                    [ leq(i, j, v),  pos(i, v), -neg(j, v)],
+                    [ leq(i, j, v),  pos(i, v),  neg(i, v)],
+                ])
+
+    for i in range(istart, s-1):
+        for j in range(i+1, s):
+            for k, v in enumerate(variables):
+                if k == 0:
+                    symbreak += [
+                            [-leq_upto(i, j, variables[0]),  leq(i, j, variables[0])],
+                            [ leq_upto(i, j, variables[0]), -leq(i, j, variables[0])]
+                        ]
+                else:
+                    symbreak.extend([
+                        [-leq_upto(i, j, v),  leq_upto(i, j, variables[k-1])],
+                        [-leq_upto(i, j, v),  leq(i, j, v)],
+                        [ leq_upto(i, j, v), -leq_upto(i, j, variables[k-1]), -leq(i, j, v)]
+                    ])
+
+    # simultaneous source property
+    # sim[i,j] says that the if the clauses are being removed in this order,
+    # at the time of removal of i (when i is a source), j is also a source
+    def sim(i, j):
+        return vp.id(f"sim[{i},{j}]")
+
+    symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(istart, s-1)] +\
+                [[-sim(i, i+1), -arc(i, i+1)] for i in range(istart, s-1)]
+
+    # ϴ(s^2·n) clauses
+    # ϴ(s^2·n) literals
+    for i in range(istart, s-2):
+        for j in range(i+2, s):
+            symbreak += [
+                    [-sim(i, j),  sim(i+1, j)],
+                    [-sim(i, j), -arc(i, j)],
+                    [ sim(i, j), -sim(i+1, j), arc(i, j)]
+                    ]
+
+    for i in range(istart, s-1):
+        for j in range(i+1, s):
+            symbreak.append(isax_mu(i) + [-sim(i, j), pos(i, variables[0]),                       -pos(j, variables[0])])
+            symbreak.append(isax_mu(i) + [-sim(i, j), pos(i, variables[0]), neg(i, variables[0]), -neg(j, variables[0])])
+            for k, v in enumerate(variables):
+                if k < len(variables) - 1:
+                    symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]),                         -pos(j, variables[k+1])])
+                    symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]), neg(i, variables[k+1]), -neg(j, variables[k+1])])
+            symbreak.append([-leq_upto(i, j, variables[-1])])
+  
+    return symbreak
+
 def symmetry_breaking(F, s, is_mu, vp):
 
     pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
@@ -688,8 +782,8 @@ def symmetry_breaking(F, s, is_mu, vp):
         for j in range(i+1, s):
             symbreak.append(isax_mu(i) + [-sim(i, j), first_prd(i, first_v), -first_prd(j, first_v)])
             for k in range(len(lits) - 1):
-                prd = pos if lits[k] > 0 else neg
-                v = abs(lits[k])
+                prd = pos if lits[k+1] > 0 else neg
+                v = abs(lits[k+1])
                 symbreak.append(isax_mu(i) + [-sim(i, j), -geq_upto(i, j, lits[k]), prd(i, v), -prd(j, v)])
             symbreak.append([-geq_upto(i, j, lits[-1])])
 
