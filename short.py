@@ -6,7 +6,7 @@ from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
 from time import perf_counter, time
 from random import shuffle
 
-import sys
+import sys, os
 import math
 import argparse
 import subprocess
@@ -94,6 +94,7 @@ class SolverWrapper:
             t_begin = perf_counter()
             output = subprocess.run([self.solver_name] + self.verbosity_args.get(self.solver_name, []) + [self.tmp_query_file], capture_output=True)
             t_end = perf_counter()
+            os.remove(self.tmp_query_file)
             self.time = t_end - t_begin
             self.ans = output.returncode == 10
             if self.ans:
