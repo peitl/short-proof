@@ -17,8 +17,10 @@ machine_summary = ""
 class Options:
     def __init__(self):
         self.verbosity = 0
+        self.sat_solver = "cadical"
         self.cardnum = 1
         self.ldq = False
+        self.cnf = ""
 
 class Formula:
     def __init__(self):
