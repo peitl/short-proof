@@ -13,6 +13,13 @@ import subprocess
 
 machine_summary = ""
 
+# convenience class to specify options for library usage
+class Options:
+    def __init__(self):
+        self.verbosity = 0
+        self.cardnum = 1
+        self.ldq = False
+
 class Formula:
     def __init__(self):
         self.clauses = []
@@ -981,16 +988,17 @@ def find_shortest_proof(F, is_mu, options):
 
     t_begin = perf_counter()
 
-    print( "--------------------------------------")
-    print( "* Finding shortest proof")
-    print( "--------------------------------------")
-    #print(f"* SAT solver: {options.sat_solver:>16}")
-    print(f"* SAT solver:          {options.sat_solver}")
-    print(f"* Cardnality encoding: {options.card} ")
-    print( "* Formula: ")
-    print()
-    draw_formula(F)
-    print( "--------------------------------------")
+    if options.verbosity >= 1:
+        print( "--------------------------------------")
+        print( "* Finding shortest proof")
+        print( "--------------------------------------")
+        #print(f"* SAT solver: {options.sat_solver:>16}")
+        print(f"* SAT solver:          {options.sat_solver}")
+        print(f"* Cardnality encoding: {options.card} ")
+        print( "* Formula: ")
+        print()
+        draw_formula(F)
+        print( "--------------------------------------")
 
     # length of the proof
     s = 1
@@ -1010,8 +1018,9 @@ def find_shortest_proof(F, is_mu, options):
         s += 1
 
     t_end = perf_counter()
-    print(f"* Time: {t_end - t_begin}")
-    print(f"* Shortest proof found: {s}")
+    if options.verbosity >= 1:
+        print(f"* Time: {t_end - t_begin}")
+        print(f"* Shortest proof found: {s}")
 
     # update machine-readable summary
     machine_summary += f",{s},{t_end-t_begin}"
@@ -1065,7 +1074,7 @@ def main():
             action="store_true",
             help="skip the minimal unsatisfiability check and assume the formula is not MU")
     parser.add_argument("-v", "--verbosity",
-            default=0,
+            default=1,
             action="count",
             help="increase verbosity")
 
