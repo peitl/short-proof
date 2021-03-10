@@ -872,11 +872,30 @@ def get_query(F, s, is_mu, card_encoding, ldq):
 
     return all_clauses, vp, max_orig_var#, cubes
 
+def get_found_proof(model, F, s, vp):
+    variables = sorted(F.exivars | F.univars)
+    m = len(F.clauses)
+    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+            make_predicates(vp)
+
+    proof_string = "["
+    mset = set(model)
+    for i in range(m, s):
+        parents = []
+        for y in range(i):
+            if arc(y, i) in mset:
+                parents.append(str(y + 1))
+        proof_string += ",".join(parents) 
+        if i < s-1:
+            proof_string += ";"
+    proof_string += "]"
+    return proof_string
+
+
 def has_short_proof(F, s, is_mu, options):
     """
-    This function takes a CNF formula f and an integer s,
-    and returns true iff f has a resolution refutation of
-    length at most s.
+    This function takes a CNF formula F and an integer s,
+    and returns a proof of F of length s or None, if there is none.
     """
 
     if s <= 2:
@@ -913,7 +932,10 @@ def has_short_proof(F, s, is_mu, options):
             reconstruct(solver_wrapper.model, F, s, vp)
             print( "--------------------------------------")
 
-    return solver_wrapper.ans
+    if solver_wrapper.ans:
+        return get_found_proof(solver_wrapper.model, F, s, vp)
+    else:
+        return None
 
 def count_short_proofs(F, s, is_mu, options):
     """
@@ -1013,11 +1035,13 @@ def find_shortest_proof(F, is_mu, options):
             print("*  - starting at s=2m-1  ")
             print("--------------------------------------")
 
-    while not has_short_proof(F, s, is_mu, options):
+    P = has_short_proof(F, s, is_mu, options)
+    while P == None:
         if options.verbosity >= 1:
             print(f"* No proof of length {s}")
             print("--------------------------------------")
         s += 1
+        P = has_short_proof(F, s, is_mu, options)
 
     t_end = perf_counter()
     if options.verbosity >= 1:
@@ -1026,7 +1050,7 @@ def find_shortest_proof(F, is_mu, options):
 
     # update machine-readable summary
     machine_summary += f",{s},{t_end-t_begin}"
-    return s
+    return P, s
 
 
 def main():
@@ -1124,7 +1148,7 @@ def main():
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
-        shortest = find_shortest_proof(F, is_mu, options)
+        P, shortest = find_shortest_proof(F, is_mu, options)
         print(machine_summary)
         sys.exit(shortest)
 
