@@ -11,6 +11,8 @@ import math
 import argparse
 import subprocess
 
+from threading import Timer
+
 machine_summary = ""
 
 # convenience class to specify options for library usage
@@ -66,13 +68,15 @@ class Formula:
             for u in self.univars:
                 self.unideps[u] |= new_free_vars
 
+
 class SolverWrapper:
     internal_solvers = {
             "cadical",
             "glucose4",
             "lingeling",
             "maplesat",
-            "minisat22"}
+            "minisat22"
+            }
     verbosity_args = {
             "kissat" : ["-q"],
             "cryptominisat5" : ["--verb", "0"],
@@ -84,7 +88,7 @@ class SolverWrapper:
         self.clauses = clauses
         self.model = []
         if self.solver_name in self.internal_solvers:
-            self.solver = Solver(name=self.solver_name, bootstrap_with=self.clauses)
+            self.solver = Solver(name=self.solver_name, bootstrap_with=self.clauses, use_timer=True)
         else:
             # write the clauses into a temporary CNF file, then
             # call  solver_name  as a subprocess,
@@ -92,14 +96,28 @@ class SolverWrapper:
             self.tmp_query_file = cnf + f".has_{query}_{time()}.cnf"
             write_formula(self.clauses, self.tmp_query_file)
 
-    def solve(self):
+    def interrupt(self):
+        self.solver.interrupt()
+
+    def solve(self, time_limit = None):
         if self.solver_name in self.internal_solvers:
-            t_begin = perf_counter()
-            self.ans = self.solver.solve()
-            t_end = perf_counter()
-            self.time = t_end - t_begin
+            #t_begin = perf_counter()
+            if time_limit != None:
+                timer = Timer(time_limit, self.interrupt)
+                timer.start()
+
+                self.ans = self.solver.solve_limited(expect_interrupt=True)
+
+                if self.ans != None:
+                    timer.cancel()
+            else:
+                self.ans = self.solver.solve()
+
+            #t_end = perf_counter()
+            self.time = self.solver.time()
             if self.ans:
                 self.model = self.solver.get_model()
+            self.solver.delete()
         else:
             t_begin = perf_counter()
             output = subprocess.run([self.solver_name] + self.verbosity_args.get(self.solver_name, []) + [self.tmp_query_file], capture_output=True)
@@ -319,7 +337,7 @@ def reconstruct(model, F, s, vp):
         strcl = " ".join(f"{lit:>3d}" for lit in clause)
         strxioms = f'ax({", ".join(map(str,axioms))})'
         strents = f'res({", ".join(map(str,parents))})'
-        print(f"{i+1:2d}: {strcl:<15}  {(strxioms if axioms else strents)}")
+        print(f"{i+1:2d}: {strcl:<{4*len(variables)}} {(strxioms if axioms else strents)}")
 
 def definitions(F, s, is_mu, vp):
 
@@ -892,7 +910,7 @@ def get_found_proof(model, F, s, vp):
     return proof_string
 
 
-def has_short_proof(F, s, is_mu, options):
+def has_short_proof(F, s, is_mu, options, time_limit = None):
     """
     This function takes a CNF formula F and an integer s,
     and returns a proof of F of length s or None, if there is none.
@@ -919,12 +937,12 @@ def has_short_proof(F, s, is_mu, options):
     solver_wrapper = SolverWrapper(options.sat_solver, query_clauses, options.cnf, s)
     del query_clauses
 
-    solver_wrapper.solve()
-    if options.verbosity >= 1:
+    solver_wrapper.solve(time_limit=time_limit)
+    if solver_wrapper.ans != None and options.verbosity >= 1:
         print(f"* Solved. ({solver_wrapper.time:.5g} sec)")
         sys.stdout.flush()
 
-    if solver_wrapper.ans:
+    if solver_wrapper.ans == True:
         if options.verbosity >= 1:
             print( "--------------------------------------")
             print(f"  Proof of length {s} found:")
@@ -932,10 +950,7 @@ def has_short_proof(F, s, is_mu, options):
             reconstruct(solver_wrapper.model, F, s, vp)
             print( "--------------------------------------")
 
-    if solver_wrapper.ans:
-        return get_found_proof(solver_wrapper.model, F, s, vp)
-    else:
-        return None
+    return solver_wrapper.ans, get_found_proof(solver_wrapper.model, F, s, vp) if solver_wrapper.ans == True else None, solver_wrapper.time
 
 def count_short_proofs(F, s, is_mu, options):
     """
@@ -1002,7 +1017,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options):
+def find_shortest_proof(F, is_mu, options, lower_bound=None, time_budget=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1035,22 +1050,34 @@ def find_shortest_proof(F, is_mu, options):
             print("*  - starting at s=2m-1  ")
             print("--------------------------------------")
 
-    P = has_short_proof(F, s, is_mu, options)
-    while P == None:
+    if lower_bound != None and lower_bound > s:
+        s = lower_bound
+
+    query_time = {}
+    ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget)
+    while ans == False:
+        query_time[s] = t
         if options.verbosity >= 1:
             print(f"* No proof of length {s}")
             print("--------------------------------------")
         s += 1
-        P = has_short_proof(F, s, is_mu, options)
+        if time_budget != None:
+            time_budget -= int(t)
+        ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget)
+    query_time[s] = t
 
     t_end = perf_counter()
     if options.verbosity >= 1:
         print(f"* Time: {t_end - t_begin}")
-        print(f"* Shortest proof found: {s}")
+        if ans == True:
+            print(f"* Shortest proof found: {s}")
+            machine_summary += f",{s},{t_end-t_begin}"
+        elif ans == None:
+            print(f"* Time out. Lower bound:{s}")
+            machine_summary += f",{s},{t_end-t_begin}"
 
     # update machine-readable summary
-    machine_summary += f",{s},{t_end-t_begin}"
-    return P, s
+    return P, s, query_time
 
 
 def main():
@@ -1087,6 +1114,12 @@ def main():
     parser.add_argument("--count",
             type=int,
             help="count the number of shortest proofs")
+    parser.add_argument("--lower-bound", "-l",
+            type=int,
+            help="a lower bound on shortest proof length")
+    parser.add_argument("--time-limit", "-t",
+            type=int,
+            help="time limit for the entire computation (in seconds)")
     parser.add_argument("--ldq",
             action="store_true",
             help="search for long-distance Q-resolution proofs")
@@ -1148,7 +1181,7 @@ def main():
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
-        P, shortest = find_shortest_proof(F, is_mu, options)
+        P, shortest, query_time = find_shortest_proof(F, is_mu, options, lower_bound=options.lower_bound, time_budget=options.time_limit)
         print(machine_summary)
         sys.exit(shortest)
 
