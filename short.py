@@ -233,6 +233,8 @@ def make_predicates(vp):
         return vp.id(f"pos[{i},{v}]")
     def neg(i, v):
         return vp.id(f"neg[{i},{v}]")
+    def empty(i):
+        return vp.id(f"empty[{i}]")
 
     # piv[i,v] says that the clause i was obtained by resolving over v
     def piv(i, v):
@@ -274,7 +276,7 @@ def make_predicates(vp):
         return vp.id(f"posdrop[{i},{j},{v}]")
     def negdrop(i, j, v):
         return vp.id(f"negdrop[{i},{j},{v}]")
-    return pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop
+    return pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop
 
 def vartable(F, s, vp):
 
@@ -313,7 +315,7 @@ def reconstruct(model, F, s, vp):
 
     variables = sorted(F.exivars | F.univars)
     m = len(F.clauses)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     mset = set(model)
@@ -345,7 +347,7 @@ def definitions(F, s, is_mu, vp):
     n = len(variables)
     m = len(F.clauses)
     fset = [set(C) for C in F.clauses]
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     definition_clauses = []
@@ -423,6 +425,12 @@ def definitions(F, s, is_mu, vp):
                 set_axioms.extend([-ax(i, j), -pos(i, v)] for i in range(j+1))
     definition_clauses += set_axioms
 
+    # definition of emptiness
+
+    definition_clauses += [[empty(i)] + [pos(i, v) for v in variables] + [neg(i, v) for v in variables] for i in range(s)] +\
+            [[-empty(i), -pos(i, v)] for i in range(s) for v in variables] +\
+            [[-empty(i), -neg(i, v)] for i in range(s) for v in variables]
+
     return definition_clauses
 
 
@@ -431,7 +439,7 @@ def essentials(F, s, is_mu, vp, ldq):
     variables = sorted(F.exivars | F.univars)
     n = len(variables)
     m = len(F.clauses)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     essential_clauses = []
@@ -491,7 +499,7 @@ def essentials(F, s, is_mu, vp, ldq):
                     ]
 
     # at most one pivot
-    # this cardinality constraint uses no auxiliary variables
+    # NOTE: this cardinality constraint uses no auxiliary variables (otherwise must be moved to the end)
     essential_clauses += [c for i in range(s)
             for c in CardEnc.atmost([piv(i, x) for x in F.exivars], encoding=EncType.pairwise).clauses]
 
@@ -525,10 +533,13 @@ def essentials(F, s, is_mu, vp, ldq):
             ]
         ]
 
+    # all clauses following an empty clause are also empty, derived by the same last step
+    # this is for when we don't have a tight lower bound, i.e. when we're not doing incremental search
+    essential_clauses += [[-empty(i), empty(i+1)] for i in range(s-1)]
+    essential_clauses += [[-arc(i,j), -empty(j), arc(i, j+1)] for j in range(2, s-1) for i in range(j)]
 
     # the last clause is empty
-    essential_clauses += [[-pos(s-1, v)] for v in variables] +\
-                   [[-neg(s-1, v)] for v in variables]
+    essential_clauses += [[empty(s-1)]]
 
     return essential_clauses
 
@@ -538,7 +549,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
     n = len(variables)
     m = len(F.clauses)
     axioms = range(m)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     # axioms appear in original order, without duplicates
@@ -563,18 +574,19 @@ def axiom_placement_clauses(F, s, is_mu, vp):
 
     return axiom_placement
 
-def redundancy(F, s, is_mu, vp, card_encoding):
+def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None):
 
     variables = sorted(F.exivars | F.univars)
     n = len(variables)
     m = len(F.clauses)
 
     redundant_clauses = []
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
-    # when successively incrementing s, we know that every clause must be used
-    redundant_clauses += [[arc(i, j) for j in range(i+1, s)] for i in range(s-1)]
+    # every non-empty clause must be used. As soon as we derive the empty clause, the
+    # rest is filled with its copies
+    redundant_clauses += [[empty(i)] + [arc(i, j) for j in range(i+1, s)] for i in range(s-1)]
 
     # in the same case, we know that no subsumed clause is ever derived
     #redundant_clauses += [
@@ -626,11 +638,15 @@ def redundancy(F, s, is_mu, vp, card_encoding):
     #    redundant_clauses += [[piv(i, v) for i in range(2, s)] for v in F.exivars]
     #    pass
 
+    # we know that there is no proof of length < known_lower_bound
+    if known_lower_bound != None:
+        redundant_clauses += [[-empty(known_lower_bound-2)]]
+
     return redundant_clauses
 
 def symmetry_breaking_v(F, s, is_mu, vp):
 
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
     variables = sorted(F.exivars | F.univars)
     lits = sorted(variables + [-v for v in variables], key=lambda lit: (abs(lit), -lit))
@@ -656,6 +672,8 @@ def symmetry_breaking_v(F, s, is_mu, vp):
     # positive occurrence = 2
     # negative occurrence = 1
     #       no occurrence = 0
+    #
+    # NOTE that this doesn't work for long-distance Q-resolution
 
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
@@ -718,13 +736,14 @@ def symmetry_breaking_v(F, s, is_mu, vp):
                 if k < len(variables) - 1:
                     symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]),                         -pos(j, variables[k+1])])
                     symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]), neg(i, variables[k+1]), -neg(j, variables[k+1])])
-            symbreak.append([-leq_upto(i, j, variables[-1])])
+            # a non-empty clause shouldn't subsume any successor clause
+            symbreak.append([empty(i), -leq_upto(i, j, variables[-1])])
   
     return symbreak
 
 def symmetry_breaking(F, s, is_mu, vp):
 
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
     variables = sorted(F.exivars | F.univars)
     lits = sorted(variables + [-v for v in variables], key=lambda lit: (abs(lit), -lit))
@@ -813,7 +832,8 @@ def symmetry_breaking(F, s, is_mu, vp):
                 prd = pos if lits[k+1] > 0 else neg
                 v = abs(lits[k+1])
                 symbreak.append(isax_mu(i) + [-sim(i, j), -geq_upto(i, j, lits[k]), prd(i, v), -prd(j, v)])
-            symbreak.append([-geq_upto(i, j, lits[-1])])
+            # a non-empty clause shouldn't subsume any successor clause
+            symbreak.append([empty(i), -qeq_upto(i, j, lits[-1])])
 
     # only for variable-transitive formulas, such as PHP: last clause must always be unit, so
     # we fix the variable in that clause to be x_{n-1}, because those are the smallest clauses
@@ -827,7 +847,7 @@ def symmetry_breaking(F, s, is_mu, vp):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding, ldq):
+def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -853,7 +873,7 @@ def get_query(F, s, is_mu, card_encoding, ldq):
     axioms = range(m)
     proof_clauses = range(s)
 
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     definition_clauses = definitions(F, s, is_mu, vp)
@@ -862,13 +882,17 @@ def get_query(F, s, is_mu, card_encoding, ldq):
 
     ############### REDUNDANCY ###############
 
-    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding)
+    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=known_lower_bound)
 
     ############### SYMMETRY BREAKING ###############
 
     axiom_placement = axiom_placement_clauses(F, s, is_mu, vp)
 
-    symbreak = symmetry_breaking(F, s, is_mu, vp)
+    symbreak = None
+    if ldq == False:
+        symbreak = symmetry_breaking_v(F, s, is_mu, vp)
+    else:
+        symbreak = symmetry_breaking(F, s, is_mu, vp)
 
     all_clauses =\
             definition_clauses +\
@@ -890,44 +914,50 @@ def get_query(F, s, is_mu, card_encoding, ldq):
 
     return all_clauses, vp, max_orig_var#, cubes
 
+# TODO: fix to work for non-mu as well, return the proof in some more versatile format
 def get_found_proof(model, F, s, vp):
     variables = sorted(F.exivars | F.univars)
     m = len(F.clauses)
-    pos, neg, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
+    pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
     proof_string = "["
+    proof_length = m
     mset = set(model)
     for i in range(m, s):
+        proof_length += 1
         parents = []
         for y in range(i):
             if arc(y, i) in mset:
                 parents.append(str(y + 1))
         proof_string += ",".join(parents) 
-        if i < s-1:
+        if empty(i) not in mset:
             proof_string += ";"
+        else:
+            break
     proof_string += "]"
-    return proof_string
+    return proof_string, proof_length
 
 
-def has_short_proof(F, s, is_mu, options, time_limit = None):
+def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
     """
     This function takes a CNF formula F and an integer s,
     and returns a proof of F of length s or None, if there is none.
     """
 
+    # TODO: make sure it works correctly even for non-MU, etc.
     if s <= 2:
         # the only way there can be such a short proof is
         # if the matrix contains the empty clause
         #return min(len(c) for c in f.clauses) == 0
-        return not all(F.clauses)
+        return not all(F.clauses), "[]", 0.01
 
     if options.verbosity >= 1:
         verb_query_begin(s)
 
     t_begin = perf_counter()
 
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum, options.ldq)
+    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum, options.ldq, known_lower_bound=known_lower_bound)
 
     t_end = perf_counter()
 
@@ -950,7 +980,8 @@ def has_short_proof(F, s, is_mu, options, time_limit = None):
             reconstruct(solver_wrapper.model, F, s, vp)
             print( "--------------------------------------")
 
-    return solver_wrapper.ans, get_found_proof(solver_wrapper.model, F, s, vp) if solver_wrapper.ans == True else None, solver_wrapper.time
+    P, l = get_found_proof(solver_wrapper.model, F, s, vp)
+    return solver_wrapper.ans, P if solver_wrapper.ans == True else None, solver_wrapper.time
 
 def count_short_proofs(F, s, is_mu, options):
     """
@@ -1017,7 +1048,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options, lower_bound=None, time_budget=None):
+def find_shortest_proof(F, is_mu, options, lower_bound=None, upper_bound=None, time_budget=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1052,18 +1083,32 @@ def find_shortest_proof(F, is_mu, options, lower_bound=None, time_budget=None):
 
     if lower_bound != None and lower_bound > s:
         s = lower_bound
-
-    query_time = {}
-    ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget)
-    while ans == False:
-        query_time[s] = t
         if options.verbosity >= 1:
-            print(f"* No proof of length {s}")
+            print("* user lower bound s = {s}")
             print("--------------------------------------")
-        s += 1
-        if time_budget != None:
-            time_budget -= int(t)
-        ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget)
+
+    # TODO: implement binary search
+    query_time = {}
+    ans = None
+    P = None
+    t = 0.0
+    t0 = perf_counter()
+    try:
+        ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget, known_lower_bound=s)
+        while ans == False:
+            query_time[s] = t
+            if options.verbosity >= 1:
+                print(f"* No proof of length {s}")
+                print("--------------------------------------")
+            s += 1
+            if time_budget != None:
+                time_budget -= int(t)
+            ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget, known_lower_bound=s)
+    except:
+        # TODO: check if output goes to terminal, print a blank line if yes
+        t = perf_counter() - t0
+        ans = None
+
     query_time[s] = t
 
     t_end = perf_counter()
@@ -1071,12 +1116,16 @@ def find_shortest_proof(F, is_mu, options, lower_bound=None, time_budget=None):
         print(f"* Time: {t_end - t_begin}")
         if ans == True:
             print(f"* Shortest proof found: {s}")
-            machine_summary += f",{s},{t_end-t_begin}"
+            machine_summary += ",OPT"
         elif ans == None:
             print(f"* Time out. Lower bound:{s}")
-            machine_summary += f",{s},{t_end-t_begin}"
+            machine_summary += ",LB"
 
-    # update machine-readable summary
+    if ans == True:
+        machine_summary += f",OPT,{s},{t_end-t_begin:.2f}"
+    elif ans == None:
+        machine_summary += f",LB,{s},{t_end-t_begin:.2f}"
+
     return P, s, query_time
 
 
@@ -1116,7 +1165,13 @@ def main():
             help="count the number of shortest proofs")
     parser.add_argument("--lower-bound", "-l",
             type=int,
-            help="a lower bound on shortest proof length")
+            help=" a lower bound on shortest proof length (no strictly shorter proof exists)")
+    parser.add_argument("--upper-bound", "-u",
+            type=int,
+            help="an upper bound on shortest proof length (a proof of this length is known to exist)")
+    parser.add_argument("--binary-search", "-b",
+            action="store_true",
+            help="apply binary search in the interval [l, u). If u is unknown, try values l + 2^n until SAT")
     parser.add_argument("--time-limit", "-t",
             type=int,
             help="time limit for the entire computation (in seconds)")
@@ -1136,8 +1191,14 @@ def main():
             default=1,
             action="count",
             help="increase verbosity")
+    parser.add_argument("-q", "--quiet",
+            action="store_true",
+            help="disable additional output")
 
     options = parser.parse_args()
+    
+    if options.quiet:
+        options.verbosity = 0
 
     options.cardnum = {
             "seqcounter"  : EncType.seqcounter,
@@ -1155,7 +1216,7 @@ def main():
 
     #F = CNF(from_file=options.cnf)
     F = read_formula(options.cnf, options.reductionless)
-    machine_summary += f"{options.cnf},{len(F.exivars) + len(F.univars)},{len(F.clauses)},{sum(len(cl) for cl in F.clauses)},graph6"
+    machine_summary += f"{options.cnf},{len(F.exivars) + len(F.univars)},{len(F.clauses)},{sum(len(cl) for cl in F.clauses)}"
 
     # instead of changing the constraints, we implement reductionless
     # long-distance Q-resolution simply by saying that all existential
@@ -1181,7 +1242,7 @@ def main():
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
-        P, shortest, query_time = find_shortest_proof(F, is_mu, options, lower_bound=options.lower_bound, time_budget=options.time_limit)
+        P, shortest, query_time = find_shortest_proof(F, is_mu, options, lower_bound=options.lower_bound, upper_bound=options.upper_bound, time_budget=options.time_limit)
         print(machine_summary)
         sys.exit(shortest)
 
