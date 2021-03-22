@@ -5,6 +5,7 @@ from pysat.formula import CNF, IDPool
 from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
 from time import perf_counter, time
 from random import shuffle
+import pysolvers
 
 import sys, os
 import math
@@ -25,7 +26,7 @@ class Options:
         self.cnf = ""
 
 class Formula:
-    def __init__(self):
+    def __init__(self, clauses=None):
         self.clauses = []
         self.exivars = set()
         self.univars = set()
@@ -33,6 +34,9 @@ class Formula:
         self.unideps = {}
         # uniblockers maps u to existential variables right of u
         self.uniblockers = {}
+        if clauses != None:
+            for C in clauses:
+                self.add_clause(C)
 
     def add_vars(self, newvars, vartype):
         """
@@ -939,32 +943,47 @@ def get_found_proof(model, F, s, vp):
     return proof_string, proof_length
 
 
-def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
+#def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
+#    pass
+def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
     """
-    This function takes a CNF formula F and an integer s,
-    and returns a proof of F of length s or None, if there is none.
+    Searches for a resolution proof of F of length s, where
+        l <= s <= u
+    Incremental linear search will call this method with u=l for increasing values of l.
+    If a proof P of length s is found, returns the tuple
+        True, P, s, t
+    if no proof exists, returns the tuple
+        False, None, None, t
+    and otherwise returns
+        None, None, None, t
+    where t is the time taken.
     """
 
+    print(f"l={l} u={u}")
+
     # TODO: make sure it works correctly even for non-MU, etc.
-    if s <= 2:
+    if u <= 2:
         # the only way there can be such a short proof is
         # if the matrix contains the empty clause
         #return min(len(c) for c in f.clauses) == 0
-        return not all(F.clauses), "[]", 0.01
+        if not all(F.clauses):
+            return True, "[]", 1, 0.0
+        else:
+            return False, None, None, 0.0
 
     if options.verbosity >= 1:
-        verb_query_begin(s)
+        verb_query_begin(u)
 
     t_begin = perf_counter()
 
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum, options.ldq, known_lower_bound=known_lower_bound)
+    query_clauses, vp, max_orig_var = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l)
 
     t_end = perf_counter()
 
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
     
-    solver_wrapper = SolverWrapper(options.sat_solver, query_clauses, options.cnf, s)
+    solver_wrapper = SolverWrapper(options.sat_solver, query_clauses, options.cnf, u)
     del query_clauses
 
     solver_wrapper.solve(time_limit=time_limit)
@@ -972,16 +991,18 @@ def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=N
         print(f"* Solved. ({solver_wrapper.time:.5g} sec)")
         sys.stdout.flush()
 
+    P = None
+    s = None
     if solver_wrapper.ans == True:
+        P, s = get_found_proof(solver_wrapper.model, F, u, vp)
         if options.verbosity >= 1:
             print( "--------------------------------------")
             print(f"  Proof of length {s} found:")
             print()
-            reconstruct(solver_wrapper.model, F, s, vp)
+            reconstruct(solver_wrapper.model, F, u, vp)
             print( "--------------------------------------")
 
-    P, l = get_found_proof(solver_wrapper.model, F, s, vp)
-    return solver_wrapper.ans, P if solver_wrapper.ans == True else None, solver_wrapper.time
+    return solver_wrapper.ans, P, s, solver_wrapper.time
 
 def count_short_proofs(F, s, is_mu, options):
     """
@@ -1048,7 +1069,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options, lower_bound=None, upper_bound=None, time_budget=None):
+def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1070,22 +1091,26 @@ def find_shortest_proof(F, is_mu, options, lower_bound=None, upper_bound=None, t
         draw_formula(F)
         print( "--------------------------------------")
 
-    # length of the proof
-    s = 1
+    # lower bound on the length of the proof
+    l = 1
     if is_mu:
         # the shortest possible proof of an MU formula is read-once
-        s = 2*len(F.clauses)-1
+        l = 2*len(F.clauses)-1
         if options.verbosity >= 1:
             print("*  The formula is MU     ")
             print("*  - using all axioms    ")
             print("*  - starting at s=2m-1  ")
             print("--------------------------------------")
 
-    if lower_bound != None and lower_bound > s:
-        s = lower_bound
+    if lower_bound != None and lower_bound > l:
+        l = lower_bound
         if options.verbosity >= 1:
-            print("* user lower bound s = {s}")
+            print("* user lower bound = {l}")
             print("--------------------------------------")
+
+    u = upper_bound
+    if u == None:
+        u = l
 
     # TODO: implement binary search
     query_time = {}
@@ -1094,39 +1119,38 @@ def find_shortest_proof(F, is_mu, options, lower_bound=None, upper_bound=None, t
     t = 0.0
     t0 = perf_counter()
     try:
-        ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget, known_lower_bound=s)
+        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget)
         while ans == False:
-            query_time[s] = t
+            query_time[u] = t
             if options.verbosity >= 1:
-                print(f"* No proof of length {s}")
+                print(f"* No proof of length {u}")
                 print("--------------------------------------")
-            s += 1
+            l += 1
+            u += 1
             if time_budget != None:
                 time_budget -= int(t)
-            ans, P, t = has_short_proof(F, s, is_mu, options, time_limit=time_budget, known_lower_bound=s)
-    except:
+            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget)
+    except pysolvers.error:
         # TODO: check if output goes to terminal, print a blank line if yes
         t = perf_counter() - t0
         ans = None
 
-    query_time[s] = t
+    query_time[u] = t
 
     t_end = perf_counter()
     if options.verbosity >= 1:
         print(f"* Time: {t_end - t_begin}")
         if ans == True:
-            print(f"* Shortest proof found: {s}")
-            machine_summary += ",OPT"
+            print(f"* Shortest proof found: {u}")
         elif ans == None:
-            print(f"* Time out. Lower bound:{s}")
-            machine_summary += ",LB"
+            print(f"* Time out. Lower bound:{u}")
 
     if ans == True:
-        machine_summary += f",OPT,{s},{t_end-t_begin:.2f}"
+        machine_summary += f",OPT,{u},{t_end-t_begin:.2f}"
     elif ans == None:
-        machine_summary += f",LB,{s},{t_end-t_begin:.2f}"
+        machine_summary += f",LB,{u},{t_end-t_begin:.2f}"
 
-    return P, s, query_time
+    return P, u, query_time
 
 
 def main():
@@ -1169,6 +1193,9 @@ def main():
     parser.add_argument("--upper-bound", "-u",
             type=int,
             help="an upper bound on shortest proof length (a proof of this length is known to exist)")
+    parser.add_argument("--has",
+            type=int,
+            help="determine whether a proof of at most this length exists")
     parser.add_argument("--binary-search", "-b",
             action="store_true",
             help="apply binary search in the interval [l, u). If u is unknown, try values l + 2^n until SAT")
@@ -1238,7 +1265,10 @@ def main():
 
 
     if options.query:
-        print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq)[0])
+        print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=options.lower_bound)[0])
+    elif options.has != None:
+        ans, P, s, t = has_short_proof(F, 2*len(F.clauses) - 1, options.has, True, options, options.time_limit)
+        sys.exit(s)
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
