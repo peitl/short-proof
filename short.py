@@ -626,9 +626,11 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None):
                             for k in range(i+2, s)]
 
             # limit the number of extra arcs to s - 2m + 1
+            # when we allowed the proof to be shorter than s, this bound had to be adapted: we can have more extra arcs,
+            # because the copies of the empty clause each have outdegree 0
             redundant_clauses += CardEnc.atmost(
-                    [exarc(i, j) for i in range(s-2) for j in range(i+2, s)],
-                    bound=s-2*m+1,
+                    [exarc(i, j) for i in range(s-2) for j in range(i+2, s)] + [-empty(i) for i in range(known_lower_bound, s)],
+                    bound=s-2*m+1+s-known_lower_bound,
                     encoding=card_encoding,
                     vpool=vp).clauses
 
