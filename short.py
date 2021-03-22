@@ -959,8 +959,6 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
     where t is the time taken.
     """
 
-    print(f"l={l} u={u}")
-
     # TODO: make sure it works correctly even for non-MU, etc.
     if u <= 2:
         # the only way there can be such a short proof is
@@ -1268,6 +1266,8 @@ def main():
         print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=options.lower_bound)[0])
     elif options.has != None:
         ans, P, s, t = has_short_proof(F, 2*len(F.clauses) - 1, options.has, True, options, options.time_limit)
+        if ans == False:
+            print(f"No proof of length ≤ {options.has}")
         sys.exit(s)
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
