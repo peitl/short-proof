@@ -616,20 +616,20 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None):
             # definition of an extra arc
             redundant_clauses += [[-arc(i, j), -arc(i, k), exarc(i, k)]
                     for i in range(s-2)
-                        for j in range(i+1, s-1)
+                        for j in range(max(i+1, m), s-1)
                             for k in range(j+1, s)]
             redundant_clauses += [[-exarc(i, j), arc(i, j)]
                     for i in range(s-2)
-                        for j in range(i+2, s)]
-            redundant_clauses += [[-exarc(i, k)] + [arc(i, j) for j in range(i+1, k)]
+                        for j in range(max(i+2, m+1), s)]
+            redundant_clauses += [[-exarc(i, k)] + [arc(i, j) for j in range(max(i+1, m), k)]
                         for i in range(s-2)
-                            for k in range(i+2, s)]
+                            for k in range(max(i+2, m+1), s)]
 
             # limit the number of extra arcs to s - 2m + 1
             # when we allowed the proof to be shorter than s, this bound had to be adapted: we can have more extra arcs,
             # because the copies of the empty clause each have outdegree 0
             redundant_clauses += CardEnc.atmost(
-                    [exarc(i, j) for i in range(s-2) for j in range(i+2, s)] + [-empty(i) for i in range(known_lower_bound, s)],
+                    [exarc(i, j) for i in range(s-2) for j in range(max(i+2, m), s)] + [-empty(i) for i in range(known_lower_bound, s)],
                     bound=s-2*m+1+s-known_lower_bound,
                     encoding=card_encoding,
                     vpool=vp).clauses
@@ -1263,13 +1263,13 @@ def main():
             sys.exit(-1)
         is_mu = is_minimal(F)
 
+    l = 2*len(F.clauses) if is_mu else 1
+    if options.lower_bound != None:
+        l = options.lower_bound
 
     if options.query:
-        print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=options.lower_bound)[0])
+        print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=l)[0])
     elif options.has != None:
-        l = 2*len(F.clauses) if is_mu else 1
-        if options.lower_bound != None:
-            l = options.lower_bound
         ans, P, s, t = has_short_proof(F, l, options.has, is_mu, options, options.time_limit)
         if ans == False:
             print(f"No proof of length ≤ {options.has}")
