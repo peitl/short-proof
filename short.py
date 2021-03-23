@@ -1267,7 +1267,10 @@ def main():
     if options.query:
         print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=options.lower_bound)[0])
     elif options.has != None:
-        ans, P, s, t = has_short_proof(F, 2*len(F.clauses) - 1, options.has, True, options, options.time_limit)
+        l = 2*len(F.clauses) if is_mu else 1
+        if options.lower_bound != None:
+            l = options.lower_bound
+        ans, P, s, t = has_short_proof(F, l, options.has, is_mu, options, options.time_limit)
         if ans == False:
             print(f"No proof of length ≤ {options.has}")
         sys.exit(s)
