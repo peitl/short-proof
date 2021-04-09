@@ -346,6 +346,24 @@ def reconstruct(model, F, s, vp):
         strents = f'res({", ".join(map(str,parents))})'
         print(f"{i+1:2d}: {strcl:<{4*len(variables)}} {(strxioms if axioms else strents)}")
 
+def reconstruct_projected(model, s, vp, G):
+
+    clause_at, clause_until, clause_after, pair_until, clause_available = make_predicates_abstract(vp)
+    mset = set(model)
+    r = len(G)
+
+    for i in range(s):
+        for C in range(r):
+            if clause_at(C, i) in mset:
+                print(str(i) + ": " + " ".join(map(str, G[C])))
+        #print(f"(available:", end="")
+        #for C in range(r):
+        #    if clause_available(C, i) in mset:
+        #        print(" " + " ".join(map(str, G[C])), end=";")
+        #print(")")
+
+
+
 def definitions(F, s, is_mu, vp):
 
     variables = sorted(F.exivars | F.univars)
@@ -954,6 +972,12 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
         clauses C, D, E range over [0, r-1], where r is the number of reachable clauses
         positions i, j range over [0, s-1], where s is the length of the proof we are looking for
 
+    Encoding size:
+      clauses = 2(3rs - r) + rs + (s-1)(r+p) + (s-1)b + sr(r-1)/2 + 3sp + m + 2
+              = 8rs -3r + 4sp - p + sb - b + sr(r-1)/2 + m + 2
+              = rs(8 + (r-1)/2) + s(4p + b) - 3r - p - b + m + 2
+      vars    = 4rs + sp
+
     (C not empty and i != j)  =>  clause_at(C, i)  =>  not clause_at(C, j)
         variant with subsumption checking (including the possibility C=D):
             C <= D and i < j  =>  clause_at(C, i)  =>  not clause_at(D, j)
@@ -978,12 +1002,15 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
     # an axiom or a level-1 clause (a resolvent of two axioms)
     # TODO: this is for MU only: level-1 clauses can always be introduced unconditionally,
     # because all preconditions are always met, so anything subsumed is superfluous
+    n = len(F.exivars | F.univars)
     G = [set(C) for C in F.clauses]
     P = defaultdict(list)
     m = len(G)
     Q = CNF()
     vp = IDPool()
     clause_at, clause_until, clause_after, pair_until, clause_available = make_predicates_abstract(vp)
+
+    clauses_of_size = [set() for i in range(n+1)]
 
     for i in range(m):
         for j in range(i+1, m):
@@ -999,9 +1026,11 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
                         break
                     if R <= G[k]:
                         G[k] = R
+                        P[k] = [(i, j)]
                         break
                 else:
                     G.append(R)
+                    P[len(G)-1] = [(i, j)]
 
     if is_mu:
         for i in range(m):
@@ -1017,6 +1046,7 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
             R = resolve(G[i], G[j])
             if R == None:
                 continue
+            # if subsumed by an axiom or a level-1 clause, we don't need R
             for k in range(r):
                 if G[k] <= R:
                     break
@@ -1039,9 +1069,24 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
         print("ERROR: cannot derive the empty clause; input satisfiable?")
         sys.exit(-1)
 
+    for C in range(r):
+        clauses_of_size[len(G[C])].add(C)
+
     Q.append([clause_at(empty_clause, s-1)])
     if known_lower_bound != None:
         Q.append([-clause_until(empty_clause, known_lower_bound-2)])
+
+    p = sum([len(p) for p in P.values()])
+    # sr(r-1)/2 clauses
+    #for i in range(s):
+    #    for C in range(r):
+    #        for D in range(C+1, r):
+    #            Q.append([-clause_at(C, i), -clause_at(D, i)])
+    
+    #for i in range(s):
+    #    Q.extend(CardEnc.atmost([clause_at(C, i) for C in range(r)], 1, vpool=vp).clauses)
+
+    #print(len(Q.clauses))
 
     #parents = set()
     #for i in range(r, len(G)):
@@ -1052,62 +1097,123 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
     #        #C.append(vp.id(p))
     #    #Q.append(C)
 
-    subsumptions = 0
+    b = 0
     r = len(G)
     for C in range(r):
+        # 3rs - r clauses
         Q.append([ clause_until(C, 0), -clause_at(C, 0)])
         Q.append([-clause_until(C, 0),  clause_at(C, 0)])
         for i in range(1, s):
             Q.append([ clause_until(C, i), -clause_at(C, i)])
             Q.append([ clause_until(C, i), -clause_until(C, i-1)])
             Q.append([-clause_until(C, i),  clause_until(C, i-1), clause_at(C, i)])
+
+        # 3rs - r clauses
         Q.append([ clause_after(C, s-1), -clause_at(C, s-1)])
         Q.append([-clause_after(C, s-1),  clause_at(C, s-1)])
         for i in range(s-1):
             Q.append([ clause_after(C, i), -clause_at(C, i)])
             Q.append([ clause_after(C, i), -clause_after(C, i+1)])
             Q.append([-clause_after(C, i),  clause_after(C, i+1), clause_at(C, i)])
+
+        # rs clauses
         for i in range(s):
             Q.append([-clause_at(C, i), clause_available(C, i)])
-        for i in range(1, s):
-            if len(P[C]) == 0:
-                # axiom
-                Q.append([clause_available(C, i)])
-            else:
-                Q.append([-clause_available(C, i)] + [pair_until(D, E, i-1) for D, E in P[C]])
-                for D, E, in P[C]:
-                    Q.append([clause_available(C, i), -pair_until(D, E, i-1)])
-        for D in range(r):
-            if D != empty_clause:
-                if G[C] <= G[D]:
-                    subsumptions += 1
-                    for i in range(s-1):
-                        Q.append([-clause_at(C, i), -clause_after(D, i+1)])
+
+        # optional
+        for i in range(m, s-1):
+            Q.append([-clause_available(C, i), clause_available(C, i+1)])
 
 
-        # symmetry breaking + only one clause at any given spot
-        for D in range(C+1, r):
-            for i in range(s):
-                Q.append([-clause_available(C, i), -clause_at(D, i), -clause_after(C, i)])
+        # (r-1)(s-1) clauses
+        if C != empty_clause:
+            for i in range(s-1):
+                Q.append([-clause_at(C, i), -clause_after(C, i+1)])
 
-    #print(f"subsumptions:{subsumptions}")
-    #print(f"r:{r}  ;  r*r*s = {r*r*s}")
-    for i in range(s):
-        for C in range(r):
-            for D in range(C+1, r):
-                Q.append([-clause_at(C, i), -clause_at(D, i)])
-
-
-    #print(len(Q.clauses))
-    #print(f"total parents = {sum([len(p) for p in P.values()])}")
+    size_basic = len(Q.clauses)
+    size = len(Q.clauses)
+    
+    # 2sp clauses
     for parent_list in P.values():
         for D, E in parent_list:
-            for i in range(s):
+            for i in range(1, s):
                 Q.append([-pair_until(D, E, i),  clause_until(D, i)])
                 Q.append([-pair_until(D, E, i),  clause_until(E, i)])
                 Q.append([ pair_until(D, E, i), -clause_until(D, i), -clause_until(E, i)])
+            # optional
+            for i in range(1, s-1):
+                Q.append([-pair_until(D, E, i), pair_until(D, E, i+1)])
+                Q.append([-pair_until(D, E, i), clause_until(D, i-1), clause_until(E, i-1)])
+
+    # (s-1)(r+p) clauses
+    for C in range(r):
+        if len(P[C]) == 0:
+            # axiom
+            #print(f"available as axiom: {G[C]}")
+            for i in range(m):
+                Q.append([clause_available(C, i)])
+            for i in range(m, s):
+                Q.append([-clause_available(C, i)])
+        else:
+            #print(f"available restricted: {G[C]}")
+            for i in range(m):
+                Q.append([-clause_available(C, i)])
+            #Q.append([-clause_available(C, 0)])
+            #Q.append([-clause_available(C, 1)])
+            for i in range(m, s):
+                Q.append([-clause_available(C, i)] + [pair_until(D, E, i-1) for D, E in P[C]])
+                for D, E, in P[C]:
+                    Q.append([clause_available(C, i), -pair_until(D, E, i-1)])
+
+    size_structure = len(Q.clauses) - size
+    size = len(Q.clauses)
+
+    # as soon as a clause becomes available, no strict superset should ever be derived
+    # sb clauses (b = number of strict subsumptions)
+    for C in range(r):
+        for D in range(r):
+            if G[C] < G[D]:
+                b += 1
+                for i in range(s):
+                    #if i == 2:
+                    #    print(f"subsumer: {G[C]}")
+                    #    print(f"subsumed: {G[D]}")
+                    Q.append([-clause_available(C, i), -clause_after(D, i)])
+
+    size_subsum = len(Q.clauses) - size
+    size = len(Q.clauses)
+
+    # symmetry breaking + only one clause at any given spot
+    # s(r(r-1)/2-b) clauses
+    for C in range(r):
+        for D in range(C+1, r):
+            # if C is available and you want to use it at i or later, then you shouldn't pick
+            # the lexicographically larger D
+            for i in range(s):
+                Q.append([-clause_available(C, i), -clause_at(D, i), -clause_after(C, i)])
+
+    size_symbreak = len(Q.clauses) - size
+    size = len(Q.clauses)
+
+    #npc = 2
+    #num_cls = r*s*(15 + r)//2 + s*((npc+1)*p + b) - 3*r - p - b + m + 2
+    #num_vars = 4*r*s + s*p
+    num_vars = Q.nv
+    #sym_size = r*s*(r-1) // 2
+    #parent_size = npc*s*p
+    #subsum_size = (s-1)*b
+    #availability_size = (s-1)*(r+p)
+    print(f"* predicted query size:    {size: 9d} clauses, {num_vars} vars")
+    #print(f"* symmetry breaking size:       {sym_size: 9d} clauses ({100*sym_size/num_cls:.2g}%)")
+    #print(f"* parent definition size:       {parent_size: 9d} clauses ({100*parent_size/num_cls:.2g}%)")
+    #print(f"* subsumption constraint size:  {subsum_size: 9d} clauses ({100*subsum_size/num_cls:.2g}%)")
+    #print(f"* availability constraint size: {availability_size: 9d} clauses ({100*availability_size/num_cls:.2g}%)")
+    print(f"* basic constraint size:       {size_basic: 9d} clauses ({100*size_basic/size:.2g}%)")
+    print(f"* structure constraint size:   {size_structure: 9d} clauses ({100*size_structure/size:.2g}%)")
+    print(f"* subsumption constraint size: {size_subsum: 9d} clauses ({100*size_subsum/size:.2g}%)")
+    print(f"* symbreaking constraint size: {size_symbreak: 9d} clauses ({100*size_symbreak/size:.2g}%)")
         
-    return Q.clauses, vp, maxvar(Q.clauses)
+    return Q.clauses, vp, G
 
 # TODO: fix to work for non-mu as well, return the proof in some more versatile format
 def get_found_proof(model, F, s, vp):
@@ -1168,7 +1274,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
     if options.enc == "traditional":
         query_clauses, vp, max_orig_var = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l)
     elif options.enc == "projected":
-        query_clauses, vp, max_orig_var = get_query_abstract(F, u, is_mu, known_lower_bound=l)
+        query_clauses, vp, G = get_query_abstract(F, u, is_mu, known_lower_bound=l)
 
     t_end = perf_counter()
 
@@ -1197,7 +1303,8 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
             if options.enc == "traditional":
                 reconstruct(solver_wrapper.model, F, u, vp)
             else:
-                print("* reconstrunction of the found proof unavailable")
+                reconstruct_projected(solver_wrapper.model, s, vp, G)
+                #print("* reconstrunction of the found proof unavailable")
             print( "--------------------------------------")
 
     return solver_wrapper.ans, P, s, solver_wrapper.time
@@ -1467,7 +1574,7 @@ def main():
             sys.exit(-1)
         is_mu = is_minimal(F)
 
-    l = 2*len(F.clauses) if is_mu else 1
+    l = 2*len(F.clauses) - 1 if is_mu else 1
     if options.lower_bound != None:
         l = options.lower_bound
 
