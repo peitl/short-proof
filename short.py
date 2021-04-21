@@ -960,7 +960,119 @@ def make_predicates_abstract(vp):
         return vp.id(f"clause_available({C},{i})")
     return clause_at, clause_until, clause_after, pair_until, clause_available
 
-def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
+def ab(a, b):
+    if a <= 1 and b <= 1:
+        return a + b
+    else:
+        return max(a, b)
+
+def hb(H, P, C, S=None):
+    if len(P[C]) == 0:
+        H[C] = 1
+        return 1
+    if C in H:
+        return H[C]
+    if S == None:
+        S = set()
+    H[C] = min((ab(hb(H, P, p[0], S=S|{C}), hb(H, P, p[1], S=S|{C})) + 1 for p in P[C] if len(set(p) & S) == 0), default = 1)
+    return H[C]
+
+def heuristic_lb(F, G, P, empty_clause):
+    r = len(G)
+    m = len(F.clauses)
+    H = {C : 0 for C in range(m)}
+    for C in range(m, r):
+        #H[C] = min((hb(H[p[0]], H[p[1]]) + 1 for p in P[C]), default=1)
+        hb(H, P, C)
+        print(H[C])
+    print("---")
+    print(H[empty_clause])
+    print(sum(H.values()))
+
+
+# TODO: finish the implementation of the direct algorithm
+def direct_shortest_proof(F, G, P, empty_clause):
+    r = len(G)
+    m = len(F.clauses)
+    # O is the open set of vertices whose all derivations have been found, but
+    # which have not been processed yet
+    O = [C for C in range(m, r) if len(P[C]) == 0]
+    CL = {range(m)}
+    # L storest a list of derivations as sets of clauses for every clause (excluding the target)
+    L = defaultdict(list)
+    while O:
+        C = O.pop()
+        
+
+def enumerate_resolvents(F):
+    n = len(F.exivars | F.univars)
+    G = [set(C) for C in F.clauses]
+    P = defaultdict(list)
+    m = len(G)
+
+    for i in range(m):
+        for j in range(i+1, m):
+            R = resolve(G[i], G[j])
+            if R == None:
+                continue
+            for k in range(m):
+                if G[k] <= R:
+                    break
+            else:
+                for k in range(m, len(G)):
+                    if G[k] <= R:
+                        break
+                    if R <= G[k]:
+                        G[k] = R
+                        P[k] = [(i, j)]
+                        break
+                else:
+                    G.append(R)
+                    #P[len(G)-1] = [(i, j)]
+
+    r = len(G)
+    empty_clause = None
+
+    i = m
+    while i < len(G):
+        for j in range(i):
+            R = resolve(G[i], G[j])
+            if R == None:
+                continue
+            # if subsumed by an axiom or a level-1 clause, we don't need R
+            for k in range(r):
+                if G[k] <= R:
+                    break
+            else:
+                for k in range(r, len(G)):
+                    if G[k] == R:
+                        P[k].append((j, i))
+                        break
+                else:
+                    G.append(R)
+                    P[len(G)-1].append((j, i))
+                    #print(f"c {len(F)}: " + " ".join(map(str, sorted(F[-1][0], key=abs))))
+                    if len(R) == 0:
+                        empty_clause = len(G) - 1
+                    #else:
+                    #    Q.append([-len(F)], weight=1)
+        i += 1
+
+    r = len(G)
+    p = sum([len(p) for p in P.values()])
+    b = len([(C, D) for C in range(r) for D in range(r) if G[C] < G[D]])
+
+    print(f"--------------------------------------")
+    print(f"* # reachable resolvents:      {r :6d}")
+    print(f"* # parent pairs:              {p :6d}")
+    print(f"* # proper subsumptions:       {b :6d}")
+    print(f"--------------------------------------")
+
+    return G, P, empty_clause
+
+
+#def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
+def get_query_abstract(F, G, P, empty_clause, s, is_mu=True, known_lower_bound=None):
     """
     An alternative encoding, where we first enumerate all possible reachable
     clauses and record their graph structure, and then encode the search for
@@ -1003,102 +1115,31 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
     # TODO: this is for MU only: level-1 clauses can always be introduced unconditionally,
     # because all preconditions are always met, so anything subsumed is superfluous
     n = len(F.exivars | F.univars)
-    G = [set(C) for C in F.clauses]
-    P = defaultdict(list)
-    m = len(G)
+    m = len(F.clauses)
     Q = CNF()
     vp = IDPool()
     clause_at, clause_until, clause_after, pair_until, clause_available = make_predicates_abstract(vp)
 
-    clauses_of_size = [set() for i in range(n+1)]
+    r = len(G)
 
-    for i in range(m):
-        for j in range(i+1, m):
-            R = resolve(G[i], G[j])
-            if R == None:
-                continue
-            for k in range(m):
-                if G[k] <= R:
-                    break
-            else:
-                for k in range(m, len(G)):
-                    if G[k] <= R:
-                        break
-                    if R <= G[k]:
-                        G[k] = R
-                        P[k] = [(i, j)]
-                        break
-                else:
-                    G.append(R)
-                    P[len(G)-1] = [(i, j)]
+    clauses_of_size = [set() for i in range(n+1)]
 
     if is_mu:
         for i in range(m):
             #print(f"c {i+1}: " + " ".join(map(str, sorted(F[i][0], key=abs))))
             Q.append([clause_at(i, i)])
 
-    r = len(G)
-    empty_clause = None
-
-    i = m
-    while i < len(G):
-        for j in range(i):
-            R = resolve(G[i], G[j])
-            if R == None:
-                continue
-            # if subsumed by an axiom or a level-1 clause, we don't need R
-            for k in range(r):
-                if G[k] <= R:
-                    break
-            else:
-                for k in range(r, len(G)):
-                    if G[k] == R:
-                        P[k].append((j, i))
-                        break
-                else:
-                    G.append(R)
-                    P[len(G)-1].append((j, i))
-                    #print(f"c {len(F)}: " + " ".join(map(str, sorted(F[-1][0], key=abs))))
-                    if len(R) == 0:
-                        empty_clause = len(G) - 1
-                    #else:
-                    #    Q.append([-len(F)], weight=1)
-        i += 1
-
     if empty_clause == None:
         print("ERROR: cannot derive the empty clause; input satisfiable?")
         sys.exit(-1)
-
-    for C in range(r):
-        clauses_of_size[len(G[C])].add(C)
 
     Q.append([clause_at(empty_clause, s-1)])
     if known_lower_bound != None:
         Q.append([-clause_until(empty_clause, known_lower_bound-2)])
 
-    p = sum([len(p) for p in P.values()])
-    # sr(r-1)/2 clauses
-    #for i in range(s):
-    #    for C in range(r):
-    #        for D in range(C+1, r):
-    #            Q.append([-clause_at(C, i), -clause_at(D, i)])
-    
-    #for i in range(s):
-    #    Q.extend(CardEnc.atmost([clause_at(C, i) for C in range(r)], 1, vpool=vp).clauses)
+    for C in range(r):
+        clauses_of_size[len(G[C])].add(C)
 
-    #print(len(Q.clauses))
-
-    #parents = set()
-    #for i in range(r, len(G)):
-    #    #C = [-(i+1)]
-    #    for j in range(1, len(G[i])):
-    #        p = F[i][j]
-    #        parents.add(p)
-    #        #C.append(vp.id(p))
-    #    #Q.append(C)
-
-    b = 0
-    r = len(G)
     for C in range(r):
         # 3rs - r clauses
         Q.append([ clause_until(C, 0), -clause_at(C, 0)])
@@ -1145,21 +1186,22 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
                 Q.append([-pair_until(D, E, i), pair_until(D, E, i+1)])
                 Q.append([-pair_until(D, E, i), clause_until(D, i-1), clause_until(E, i-1)])
 
+    # assuming mu here
     # (s-1)(r+p) clauses
-    for C in range(r):
+    for C in range(m):
+        for i in range(m):
+            Q.append([clause_available(C, i)])
+        for i in range(m, s):
+            Q.append([-clause_available(C, i)])
+    for C in range(m, r):
+        # non-axiom
+        for i in range(m):
+            Q.append([-clause_available(C, i)])
         if len(P[C]) == 0:
-            # axiom
-            #print(f"available as axiom: {G[C]}")
-            for i in range(m):
-                Q.append([clause_available(C, i)])
+            # level-1 clause
             for i in range(m, s):
-                Q.append([-clause_available(C, i)])
+                Q.append([clause_available(C, i)])
         else:
-            #print(f"available restricted: {G[C]}")
-            for i in range(m):
-                Q.append([-clause_available(C, i)])
-            #Q.append([-clause_available(C, 0)])
-            #Q.append([-clause_available(C, 1)])
             for i in range(m, s):
                 Q.append([-clause_available(C, i)] + [pair_until(D, E, i-1) for D, E in P[C]])
                 for D, E, in P[C]:
@@ -1173,18 +1215,14 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
     for C in range(r):
         for D in range(r):
             if G[C] < G[D]:
-                b += 1
                 for i in range(s):
-                    #if i == 2:
-                    #    print(f"subsumer: {G[C]}")
-                    #    print(f"subsumed: {G[D]}")
                     Q.append([-clause_available(C, i), -clause_after(D, i)])
 
     size_subsum = len(Q.clauses) - size
     size = len(Q.clauses)
 
     # symmetry breaking + only one clause at any given spot
-    # s(r(r-1)/2-b) clauses
+    # sr(r-1)/2 clauses
     for C in range(r):
         for D in range(C+1, r):
             # if C is available and you want to use it at i or later, then you shouldn't pick
@@ -1192,28 +1230,51 @@ def get_query_abstract(F, s, is_mu=True, known_lower_bound=None):
             for i in range(s):
                 Q.append([-clause_available(C, i), -clause_at(D, i), -clause_after(C, i)])
 
+    for C in range(r):
+        for D in range(C+1, r):
+            for i in range(s):
+                Q.append([-clause_at(C, i), -clause_at(D, i)])
+
     size_symbreak = len(Q.clauses) - size
     size = len(Q.clauses)
 
-    #npc = 2
-    #num_cls = r*s*(15 + r)//2 + s*((npc+1)*p + b) - 3*r - p - b + m + 2
-    #num_vars = 4*r*s + s*p
+    l = 1
+    if known_lower_bound != None:
+        l = known_lower_bound - 1
+
+    S = clauses_of_size[0]
+    for k in range(1, n):
+        S |= clauses_of_size[k]
+        for i in range(l, s):
+            Q.append([-clause_at(empty_clause, i)] + [clause_at(C, i-k) for C in S])
+
+    for i in range(m, s-n-1):
+        Q.append([clause_at(C, i) for C in range(r)])
+
+    size_cardbound = len(Q.clauses) - size
+    size = len(Q.clauses)
+
+    # TODO: add a constraint that every clause must be used: for every clause, explicitly enumerate
+    # all clauses that it can directly resolve to, and say that one of them should appear afterwards
+    #for i in range(m, s):
+    #    Q.clauses.extend(CardEnc.atmost([clause_after(C, i) for C in range(r)], s-i, vpool=vp).clauses)
+
+    ## DEBUG constraint: see if the encoding allows no clause in a place
+    ##Q.clauses.extend([[-clause_at(C, m+1)] for C in range(r)])
+
+    #size_useclause = len(Q.clauses) - size
+    #size = len(Q.clauses)
+
     num_vars = Q.nv
-    #sym_size = r*s*(r-1) // 2
-    #parent_size = npc*s*p
-    #subsum_size = (s-1)*b
-    #availability_size = (s-1)*(r+p)
     print(f"* predicted query size:    {size: 9d} clauses, {num_vars} vars")
-    #print(f"* symmetry breaking size:       {sym_size: 9d} clauses ({100*sym_size/num_cls:.2g}%)")
-    #print(f"* parent definition size:       {parent_size: 9d} clauses ({100*parent_size/num_cls:.2g}%)")
-    #print(f"* subsumption constraint size:  {subsum_size: 9d} clauses ({100*subsum_size/num_cls:.2g}%)")
-    #print(f"* availability constraint size: {availability_size: 9d} clauses ({100*availability_size/num_cls:.2g}%)")
     print(f"* basic constraint size:       {size_basic: 9d} clauses ({100*size_basic/size:.2g}%)")
     print(f"* structure constraint size:   {size_structure: 9d} clauses ({100*size_structure/size:.2g}%)")
     print(f"* subsumption constraint size: {size_subsum: 9d} clauses ({100*size_subsum/size:.2g}%)")
     print(f"* symbreaking constraint size: {size_symbreak: 9d} clauses ({100*size_symbreak/size:.2g}%)")
+    print(f"* cardbound constraint size:   {size_cardbound: 9d} clauses ({100*size_cardbound/size:.2g}%)")
+    #print(f"* useclause constraint size:   {size_useclause: 9d} clauses ({100*size_useclause/size:.2g}%)")
         
-    return Q.clauses, vp, G
+    return Q.clauses, vp
 
 # TODO: fix to work for non-mu as well, return the proof in some more versatile format
 def get_found_proof(model, F, s, vp):
@@ -1242,7 +1303,7 @@ def get_found_proof(model, F, s, vp):
 
 #def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
 #    pass
-def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
+def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=None, P=None, empty_clause=None):
     """
     Searches for a resolution proof of F of length s, where
         l <= s <= u
@@ -1274,7 +1335,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None):
     if options.enc == "traditional":
         query_clauses, vp, max_orig_var = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l)
     elif options.enc == "projected":
-        query_clauses, vp, G = get_query_abstract(F, u, is_mu, known_lower_bound=l)
+        query_clauses, vp = get_query_abstract(F, G, P, empty_clause, u, is_mu, known_lower_bound=l)
 
     t_end = perf_counter()
 
@@ -1374,7 +1435,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None):
+def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None, G=None, parents=None, empty_clause=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1424,7 +1485,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
     t = 0.0
     t0 = perf_counter()
     try:
-        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget)
+        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause)
         while ans == False:
             query_time[u] = t
             if options.verbosity >= 1:
@@ -1434,7 +1495,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
             u += 1
             if time_budget != None:
                 time_budget -= int(t)
-            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget)
+            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause)
     except pysolvers.error:
         # TODO: check if output goes to terminal, print a blank line if yes
         t = perf_counter() - t0
@@ -1578,20 +1639,28 @@ def main():
     if options.lower_bound != None:
         l = options.lower_bound
 
+    G, P, empty_clause = None, None, None
+    if options.enc == "projected":
+        G, P, empty_clause = enumerate_resolvents(F)
+        if empty_clause == None:
+            print("ERROR: cannot derive the empty clause; input satisfiable?")
+            sys.exit(-1)
+        #heuristic_lb(F, G, P, empty_clause)
+
     if options.query:
         if options.enc == "traditional":
             print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=l)[0])
         elif options.enc == "projected":
-            print_formula(get_query_abstract(F, options.query, is_mu, known_lower_bound=options.query)[0])
+            print_formula(get_query_abstract(F, G, P, empty_clause, options.query, is_mu, known_lower_bound=options.query)[0])
     elif options.has != None:
-        ans, P, s, t = has_short_proof(F, l, options.has, is_mu, options, options.time_limit)
+        ans, P, s, t = has_short_proof(F, l, options.has, is_mu, options, options.time_limit, G=G, P=P, empty_clause=empty_clause)
         if ans == False:
             print(f"No proof of length ≤ {options.has}")
         sys.exit(s)
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
     else:
-        P, shortest, query_time = find_shortest_proof(F, is_mu, options, lower_bound=options.lower_bound, upper_bound=options.upper_bound, time_budget=options.time_limit)
+        P, shortest, query_time = find_shortest_proof(F, is_mu, options, lower_bound=options.lower_bound, upper_bound=options.upper_bound, time_budget=options.time_limit, G=G, parents=P, empty_clause=empty_clause)
         print(machine_summary)
         sys.exit(shortest)
 
