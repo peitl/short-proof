@@ -1682,7 +1682,11 @@ def main():
     elif options.has != None:
         ans, P, s, t = has_short_proof(F, l, options.has, is_mu, options, options.time_limit, G=G, P=P, empty_clause=empty_clause)
         if ans == False:
-            print(f"No proof of length ≤ {options.has}")
+            if options.verbosity:
+                print(f"No proof of length ≤ {options.has}")
+            print(f"LB _ {options.has+1} {t:.2f}s")
+        elif ans == True:
+            print(f"UB {P} {s} {t:.2f}s")
         sys.exit(s)
     elif options.count:
         print(count_short_proofs(F, options.count, is_mu, options))
