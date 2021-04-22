@@ -1545,6 +1545,25 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
 
     return P, u, query_time
 
+def read_proof_structure(prooffile):
+    arcset = set()
+    size = 0
+    with open(prooffile) as pfp:
+        for line in pfp:
+            size += 1
+            tokens = list(map(int, line.split()))
+            current = tokens[0]
+            idx = tokens.index(0) + 1
+            while idx < len(tokens) and tokens[idx] != 0:
+                arcset.add((tokens[idx], current))
+                idx += 1
+    return size, arcset
+
+def assume_proof(arcset, vp):
+    def arc(i, j):
+        return vp.id(f"arc[{i},{j}]")
+    return [arc(i-1, j-1) for i, j in arcset]
+
 
 def main():
     if sys.version_info.major < 3 or sys.version_info.minor < 6:
@@ -1613,6 +1632,9 @@ def main():
     mu_group.add_argument("--not-mu",
             action="store_true",
             help="skip the minimal unsatisfiability check and assume the formula is not MU")
+    mu_group.add_argument("--test",
+            action="store_true",
+            help="test the correctness of the encoding. Assumes the existence of the file CNF.proof")
     parser.add_argument("-v", "--verbosity",
             default=1,
             action="count",
@@ -1674,7 +1696,21 @@ def main():
             sys.exit(-1)
         #heuristic_lb(F, G, P, empty_clause)
 
-    if options.query:
+    if options.test:
+        # test the correctness of lower bounds produce by --has
+        # reads an existing proof, then tries to plug it into longer queries to see if it satisfies them
+        num_test_cases = 10
+        size, proof_DAG = read_proof_structure(options.cnf + ".proof")
+        for i in range(size, size+num_test_cases):
+            Q, vp, mvar = get_query(F, size, is_mu, options.cardnum, options.ldq, known_lower_bound=l) 
+            s = Solver(name="cadical", bootstrap_with=Q)
+            if s.solve(assumptions=assume_proof(proof_DAG, vp)) == False:
+                print(f"query {size} unsatisfiable")
+                print("FAILED")
+                break
+        else:
+            print("PASSED")
+    elif options.query:
         if options.enc == "traditional":
             print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=l)[0])
         elif options.enc == "projected":
