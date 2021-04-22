@@ -763,7 +763,34 @@ def symmetry_breaking_v(F, s, is_mu, vp):
                     symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]), neg(i, variables[k+1]), -neg(j, variables[k+1])])
             # a non-empty clause shouldn't subsume any successor clause
             symbreak.append([empty(i), -leq_upto(i, j, variables[-1])])
-  
+
+    # only for variable-transitive formulas, such as PHP: the last clause must always be unit,
+    # and in fact we can pick the literal in that clause (by a Lemma)
+    # we pick the last negative literal because it is the smallest in the lex-ordering
+    # we can also constrain the clause before that
+
+    #TODO: detect formula symmetries and orbits automatically
+    #symbreak += [[pos(s-2, variables[-1]), neg(s-2, variables[-1])]] +\
+    #symbreak += [[neg(s-2, variables[-1])]] +\
+    #        [[-pos(s-2, v)] for v in variables[:-1]] +\
+    #        [[-neg(s-2, v)] for v in variables[:-1]] +\
+    #        [[pos(s-3, variables[-1]), neg(s-3, variables[-1])]] +\
+    #        [[-pos(s-3, variables[-1]), -pos(s-3, v)] for v in variables[:-1]] +\
+    #        [[-pos(s-3, variables[-1]), -neg(s-3, v)] for v in variables[:-1]]
+
+    #TODO: the Lemma says that if O contains a variable from every var-orbit, then there is a variable o in O
+    # such that an arbitrary literal of o can be placed as the last unit clause. We pick the negative literal
+    # because that cannot clash with the symmetry breaking (really though? What if the negative clause can be
+    # derived much earlier?) all variables always contain a variable from every orbit, so that's an overapprox.
+    #symbreak += [[neg(s-2, v) for v in variables]]
+    #symbreak += [[neg(s-2, variables[0])]]
+
+    #for i in range(1, 3):
+    #    symbreak += CardEnc.atmost(
+    #            [pos(s-1-i, v) for v in variables] +
+    #            [neg(s-1-i, v) for v in variables],
+    #            i, vpool=vp).clauses
+
     return symbreak
 
 def symmetry_breaking(F, s, is_mu, vp):
