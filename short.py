@@ -14,6 +14,7 @@ import argparse
 import subprocess
 
 from threading import Timer
+from multiprocessing import Pool
 
 machine_summary = ""
 
@@ -25,6 +26,7 @@ class Options:
         self.cardnum = 1
         self.ldq = False
         self.cnf = ""
+        self.enc = "traditional"
 
 class Formula:
     def __init__(self, clauses=None):
@@ -73,6 +75,25 @@ class Formula:
             for u in self.univars:
                 self.unideps[u] |= new_free_vars
 
+def internal_parallel_solve(solver_name, clauses, time_limit):
+    solver = Solver(name=solver_name, bootstrap_with=clauses, use_timer=True)
+    ans = None
+    model = None
+    if time_limit != None:
+        timer = Timer(time_limit, self.interrupt)
+        timer.start()
+
+        ans = solver.solve_limited(expect_interrupt=True)
+
+        if ans != None:
+            timer.cancel()
+    else:
+        ans = solver.solve()
+    if ans == True:
+        model = solver.get_model()
+    time = solver.time()
+    solver.delete()
+    return ans, model, time
 
 class SolverWrapper:
     internal_solvers = {
@@ -92,38 +113,37 @@ class SolverWrapper:
         self.solver_name = solver_name
         self.clauses = clauses
         self.model = []
-        if self.solver_name in self.internal_solvers:
-            self.solver = Solver(name=self.solver_name, bootstrap_with=self.clauses, use_timer=True)
-        else:
-            # write the clauses into a temporary CNF file, then
-            # call  solver_name  as a subprocess,
-            # capture output and read the model
-            self.tmp_query_file = cnf + f".has_{query}_{time()}.cnf"
-            write_formula(self.clauses, self.tmp_query_file)
+        self.query = query
 
     def interrupt(self):
         self.solver.interrupt()
 
-    def solve(self, time_limit = None):
+    def solve(self, time_limit = None, assumptions = None):
         if self.solver_name in self.internal_solvers:
-            #t_begin = perf_counter()
-            if time_limit != None:
-                timer = Timer(time_limit, self.interrupt)
-                timer.start()
-
-                self.ans = self.solver.solve_limited(expect_interrupt=True)
-
-                if self.ans != None:
-                    timer.cancel()
+            if assumptions == None:
+                self.ans, self.model, self.time = internal_parallel_solve(self.solver_name, self.clauses, time_limit)
             else:
-                self.ans = self.solver.solve()
-
-            #t_end = perf_counter()
-            self.time = self.solver.time()
-            if self.ans:
-                self.model = self.solver.get_model()
-            self.solver.delete()
+                print(f"Executing {len(assumptions)} processes")
+                # TODO: collect results as soon as a process finishes, break everything as soon as a proof is found
+                # maybe this is not possible with Pool.map, then we need to start processes the usual way
+                with Pool(len(assumptions)) as p:
+                    answers = p.starmap(internal_parallel_solve, [(self.solver_name, self.clauses + [[a] for a in orbit_assumption], time_limit) for orbit_assumption in assumptions])
+                self.ans = False
+                self.time = 0.0
+                for ans, model, time in answers:
+                    self.time = max(self.time, time)
+                    if ans == True:
+                        self.ans = True
+                        self.model = model
+                        break
+                    if ans == None:
+                        self.ans = None                      
         else:
+            # write the clauses into a temporary CNF file, then
+            # call  solver_name  as a subprocess,
+            # capture output and read the model
+            self.tmp_query_file = cnf + f".has_{self.query}_{time()}.cnf"
+            write_formula(self.clauses, self.tmp_query_file)
             t_begin = perf_counter()
             output = subprocess.run([self.solver_name] + self.verbosity_args.get(self.solver_name, []) + [self.tmp_query_file], capture_output=True)
             t_end = perf_counter()
@@ -558,6 +578,10 @@ def essentials(F, s, is_mu, vp, ldq):
 
     # all clauses following an empty clause are also empty, derived by the same last step
     # this is for when we don't have a tight lower bound, i.e. when we're not doing incremental search
+    #
+    # WARNING: this has to be updated, if we want to fix a suffix of the proof, such as the last
+    # resolution step. What can happen is we can have  [ ..., empty, empty, empty, x, -x, empty]
+    # thus, here we need to know whether we are fixing something at the end, and adjust accordingly
     essential_clauses += [[-empty(i), empty(i+1)] for i in range(s-1)]
     essential_clauses += [[-arc(i,j), -empty(j), arc(i, j+1)] for j in range(2, s-1) for i in range(j)]
 
@@ -597,7 +621,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
 
     return axiom_placement
 
-def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None):
+def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbits=None):
 
     variables = sorted(F.exivars | F.univars)
     n = len(variables)
@@ -669,7 +693,7 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None):
 
     return redundant_clauses
 
-def symmetry_breaking_v(F, s, is_mu, vp):
+def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
 
     pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
@@ -700,14 +724,19 @@ def symmetry_breaking_v(F, s, is_mu, vp):
     #
     # NOTE that this doesn't work for long-distance Q-resolution
 
+    # the last clause on which the lex ordering should be enforced
+    last = s-3
+    if var_orbits != None:
+        last = s-2
+
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
 
     def leq_upto(i, j, l):
         return vp.id(f"leq_upto[{i},{j},{v}]")
 
-    for i in range(istart, s-1):
-        for j in range(i+1, s):
+    for i in range(istart, last-1):
+        for j in range(i+1, last):
             for v in variables:
                 #prd = pos if lits[k] > 0 else neg
                 #v = abs(lits[k])
@@ -719,8 +748,8 @@ def symmetry_breaking_v(F, s, is_mu, vp):
                     [ leq(i, j, v),  pos(i, v),  neg(i, v)],
                 ])
 
-    for i in range(istart, s-1):
-        for j in range(i+1, s):
+    for i in range(istart, last-1):
+        for j in range(i+1, last):
             for k, v in enumerate(variables):
                 if k == 0:
                     symbreak += [
@@ -740,21 +769,21 @@ def symmetry_breaking_v(F, s, is_mu, vp):
     def sim(i, j):
         return vp.id(f"sim[{i},{j}]")
 
-    symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(istart, s-1)] +\
-                [[-sim(i, i+1), -arc(i, i+1)] for i in range(istart, s-1)]
+    symbreak += [[ sim(i, i+1),  arc(i, i+1)] for i in range(istart, last-1)] +\
+                [[-sim(i, i+1), -arc(i, i+1)] for i in range(istart, last-1)]
 
     # ϴ(s^2·n) clauses
     # ϴ(s^2·n) literals
-    for i in range(istart, s-2):
-        for j in range(i+2, s):
+    for i in range(istart, last-2):
+        for j in range(i+2, last):
             symbreak += [
                     [-sim(i, j),  sim(i+1, j)],
                     [-sim(i, j), -arc(i, j)],
                     [ sim(i, j), -sim(i+1, j), arc(i, j)]
                     ]
 
-    for i in range(istart, s-1):
-        for j in range(i+1, s):
+    for i in range(istart, last-1):
+        for j in range(i+1, last):
             symbreak.append(isax_mu(i) + [-sim(i, j), pos(i, variables[0]),                       -pos(j, variables[0])])
             symbreak.append(isax_mu(i) + [-sim(i, j), pos(i, variables[0]), neg(i, variables[0]), -neg(j, variables[0])])
             for k, v in enumerate(variables):
@@ -763,6 +792,28 @@ def symmetry_breaking_v(F, s, is_mu, vp):
                     symbreak.append(isax_mu(i) + [-sim(i, j), -leq_upto(i, j, v), pos(i, variables[k+1]), neg(i, variables[k+1]), -neg(j, variables[k+1])])
             # a non-empty clause shouldn't subsume any successor clause
             symbreak.append([empty(i), -leq_upto(i, j, variables[-1])])
+
+    assumptions = None
+    if var_orbits != None:
+        assumptions = []
+        for O in var_orbits:
+            v = O[0]
+            assumptions.append(
+                    [
+                        neg(s-2, v),
+                        pos(s-3, v)
+                    ] + [
+                        -pos(s-2, w) for w in variables
+                    ] + [
+                        -neg(s-3, w) for w in variables
+                    ] + [
+                        -pos(s-3, w) for w in variables if v != w
+                    ] + [
+                        -neg(s-2, w) for w in variables if v != w
+                    ] + [arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]
+                )
+                        
+
 
     # only for variable-transitive formulas, such as PHP: the last clause must always be unit,
     # and in fact we can pick the literal in that clause (by a Lemma)
@@ -791,9 +842,9 @@ def symmetry_breaking_v(F, s, is_mu, vp):
     #            [neg(s-1-i, v) for v in variables],
     #            i, vpool=vp).clauses
 
-    return symbreak
+    return symbreak, assumptions
 
-def symmetry_breaking(F, s, is_mu, vp):
+def symmetry_breaking(F, s, is_mu, vp, var_orbits=None):
 
     pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
@@ -899,18 +950,20 @@ def symmetry_breaking(F, s, is_mu, vp):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None):
+def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
 
     Does F have a resolution refutation of length at most s?
 
-    WARNING: for optimisation reasons, the clauses currently
-    returned say "F has a resolution refutation of length exactly s"
-
     It also returns lists of variables that are useful in order
     to recover the found proof.
+
+    The optional variable_orbits argument specifies the orbits of the variables 1..n
+    under a group of symmetries of F. If given, get_query will additionally return
+    a list of lists of assumptions that try to find a proof by fixing the last resolution
+    step to a variable of each orbit in turn.
     """
 
     variables = sorted(F.exivars | F.univars)
@@ -941,10 +994,11 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None):
     axiom_placement = axiom_placement_clauses(F, s, is_mu, vp)
 
     symbreak = None
+    assumptions = None
     if ldq == False:
-        symbreak = symmetry_breaking_v(F, s, is_mu, vp)
+        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits)
     else:
-        symbreak = symmetry_breaking(F, s, is_mu, vp)
+        symbreak = symmetry_breaking(F, s, is_mu, vp, var_orbits=var_orbits)
 
     all_clauses =\
             definition_clauses +\
@@ -964,7 +1018,7 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None):
 
     cubes = []
 
-    return all_clauses, vp, max_orig_var#, cubes
+    return all_clauses, vp, max_orig_var, assumptions#, cubes
 
 def resolve(C, D):
     clash_set = {x for x in C if -x in D}
@@ -1330,7 +1384,7 @@ def get_found_proof(model, F, s, vp):
 
 #def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
 #    pass
-def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=None, P=None, empty_clause=None):
+def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=None, P=None, empty_clause=None, var_orbits=None):
     """
     Searches for a resolution proof of F of length s, where
         l <= s <= u
@@ -1360,7 +1414,18 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
     t_begin = perf_counter()
 
     if options.enc == "traditional":
-        query_clauses, vp, max_orig_var = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l)
+        if var_orbits != None:
+            # if we're specifying variable orbits, we must be looking for a proof of exact length for
+            # technical reasons. The purpose of specifying orbits is to break the problem down by
+            # the last resolution step (possibly more than just that) in order to parallelize. In that
+            # case, do parallelize over proof lengths as well... it would require some substantial changes
+            # to the encoding to allow fixing a suffix of the proof while allowing slack in proof length
+            if l < u:
+                print(f"WARNING: proof length lower bound does not match upper bound (l={l}, u={u})", file=sys.stderr)
+                print(f"         when variable orbits are calculated and proof suffix is fixed, length must be exact", file=sys.stderr)
+                print(f"         setting l={u}", file=sys.stderr)
+                l = u
+        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits)
     elif options.enc == "projected":
         query_clauses, vp = get_query_abstract(F, G, P, empty_clause, u, is_mu, known_lower_bound=l)
 
@@ -1372,7 +1437,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
     solver_wrapper = SolverWrapper(options.sat_solver, query_clauses, options.cnf, u)
     del query_clauses
 
-    solver_wrapper.solve(time_limit=time_limit)
+    solver_wrapper.solve(time_limit=time_limit, assumptions=assumptions)
     if solver_wrapper.ans != None and options.verbosity >= 1:
         print(f"* Solved. ({solver_wrapper.time:.5g} sec)")
         sys.stdout.flush()
@@ -1413,7 +1478,7 @@ def count_short_proofs(F, s, is_mu, options):
         verb_query_begin(s)
 
     t_begin = perf_counter()
-    query_clauses, vp, max_orig_var = get_query(F, s, is_mu, options.cardnum)
+    query_clauses, vp, max_orig_var, assumptions = get_query(F, s, is_mu, options.cardnum)
     t_end = perf_counter()
 
     if options.verbosity >= 1:
@@ -1702,7 +1767,7 @@ def main():
         num_test_cases = 10
         size, proof_DAG = read_proof_structure(options.cnf + ".proof")
         for i in range(size, size+num_test_cases):
-            Q, vp, mvar = get_query(F, size, is_mu, options.cardnum, options.ldq, known_lower_bound=l) 
+            Q, vp, mvar, assumptions = get_query(F, size, is_mu, options.cardnum, options.ldq, known_lower_bound=l) 
             s = Solver(name="cadical", bootstrap_with=Q)
             if s.solve(assumptions=assume_proof(proof_DAG, vp)) == False:
                 print(f"query {size} unsatisfiable")
