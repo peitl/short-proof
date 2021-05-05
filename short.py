@@ -3,7 +3,7 @@
 from pysat.card import CardEnc, EncType
 from pysat.formula import CNF, IDPool
 from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
-from time import perf_counter, time
+from time import perf_counter, time, sleep
 from random import shuffle
 from collections import defaultdict
 import pysolvers
@@ -12,6 +12,7 @@ import sys, os
 import math
 import argparse
 import subprocess
+import functools
 
 from threading import Timer
 from multiprocessing import Pool
@@ -123,21 +124,44 @@ class SolverWrapper:
             if assumptions == None:
                 self.ans, self.model, self.time = internal_parallel_solve(self.solver_name, self.clauses, time_limit)
             else:
-                print(f"Executing {len(assumptions)} processes")
-                # TODO: collect results as soon as a process finishes, break everything as soon as a proof is found
-                # maybe this is not possible with Pool.map, then we need to start processes the usual way
-                with Pool(len(assumptions)) as p:
-                    answers = p.starmap(internal_parallel_solve, [(self.solver_name, self.clauses + [[a] for a in orbit_assumption], time_limit) for orbit_assumption in assumptions])
+                #print(f"Executing {len(assumptions)} process" + "es" if len(assumptions) > 1 else "")
+                answers_async = [None for a in assumptions]
+                with Pool() as p:
+                    def terminate_others(val):
+                        if val == True:
+                            #print("a process found a proof, terminating others")
+                            p.terminate()
+                        #elif val == False:
+                        #    print("a process proved a lower bound, waiting for others")
+                    for i, assumption in enumerate(assumptions):
+                        answers_async[i] = p.apply_async(
+                                internal_parallel_solve,
+                                (
+                                    self.solver_name,
+                                    self.clauses + [[a] for a in assumption],
+                                    None
+                                ),
+                                callback=lambda val: terminate_others(val[0]))
+                    p.close()
+                    p.join()
+                answers = [answer_async.get() for answer_async in answers_async if answer_async.ready()]
+                #print(f"done (with {len(answers)} answers)")
+                #print([(ans, time) for ans, model, time in answers])
                 self.ans = False
                 self.time = 0.0
+                total_time = 0.0
                 for ans, model, time in answers:
                     self.time = max(self.time, time)
+                    total_time += time
                     if ans == True:
                         self.ans = True
                         self.model = model
+                        self.time = time
                         break
                     if ans == None:
                         self.ans = None                      
+                print(f"* Solved query {self.query} with answer {self.ans} in {self.time:.2f} sec ({total_time:.2f} sec total work)")
+
         else:
             # write the clauses into a temporary CNF file, then
             # call  solver_name  as a subprocess,
@@ -725,9 +749,9 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
     # NOTE that this doesn't work for long-distance Q-resolution
 
     # the last clause on which the lex ordering should be enforced
-    last = s-3
+    last = s-1
     if var_orbits != None:
-        last = s-2
+        last = s-3
 
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
@@ -1071,18 +1095,111 @@ def heuristic_lb(F, G, P, empty_clause):
     print(sum(H.values()))
 
 
+def occurrence_dict(set_seq):
+    occ = defaultdict(set)
+    for i, S in enumerate(set_seq):
+        for e in S:
+            occ[e].add(i)
+    return occ
+
+def not_subsumed(set_seq):
+    """
+        assumes set_seq is in increasing cardinality order and without duplicates
+    """
+    occ = occurrence_dict(set_seq)
+    subsumed = [False] * len(set_seq)
+    #for i in range(len(set_seq)):
+    for i, C in enumerate(set_seq):
+        if not subsumed[i]:
+            subsumed_by_current = functools.reduce(set.intersection, [occ[e] for e in C])
+            for j in subsumed_by_current:
+                if i < j:
+                    subsumed[j] = True
+    return [X for i, X in enumerate(set_seq) if not subsumed[i]]
+
+def prod(A, B):
+    return not_subsumed(sorted({a | b for a in A for b in B}, key=len))
+
+debug_size=16
+t_last=None
+# TODO: short-circuit queries with S larger than some S already known
+def all_derivations(C, P, subsumers, m, S=None, cache={}):
+    """
+        return all derivations of C (as a list of sets of clauses) that do not use clauses from S
+    """
+    global debug_size, t_last
+    if C < m:
+        return [frozenset()]
+    if S == None:
+        S = set()
+    S |= subsumers[C]
+    val = cache.get(C)
+    if val != None:
+        for S_cached, derivations in val:
+            if S_cached == S:
+                return derivations
+            if S_cached < S:
+                return [D for D in derivations if len(D & S) == 0]
+    derivations_S = not_subsumed(
+            sorted(
+                (x | {C} for p in P[C] if len(set(p) & S) == 0 for x in prod(
+                            all_derivations(p[0], P, subsumers, m, S=S|{C}),
+                            all_derivations(p[1], P, subsumers, m, S=S|{C})
+                        )),
+                key=len
+            )
+        )
+    if len(derivations_S) == 0:
+        derivations_S = [frozenset([C])]
+    if val != None:
+        cache[C] = [(cS, cD) for cS, cD in val if not (len(S) < len(cS) and S < cS)] + [(S, derivations_S)]
+        #cache[C].append((S, derivations_S))
+    else:
+        cache[C] = [(S, derivations_S)]
+    num_deriv = sum(sum(len(D) for S, D in x) for x in cache.values())
+    if num_deriv >= debug_size:
+        cache_length = sum(len(c) for c in cache.values())
+        #cache_subsumptions = sum(1 for x in cache.values() for i, (cS, D) in enumerate(x) for j in range(i+1, len(x)) if cS <= x[j][0] or x[j][0] <= cS) 
+        print(f"cache length: {num_deriv} (caches sets: {cache_length}, cache clauses: {len(cache)})", end="")
+        #print(f"cache length: {num_deriv} (caches sets: {cache_length}, cache_subsumptions: {cache_subsumptions}, cache clauses: {len(cache)})", end="")
+        debug_size *= 2
+        t_now = perf_counter()
+        if t_last != None:
+            print(f" doubling time: {t_now - t_last:.2f}")
+        else:
+            print()
+        t_last = t_now
+    #print([C, S, derivations_S])
+    return derivations_S
+
 # TODO: finish the implementation of the direct algorithm
 def direct_shortest_proof(F, G, P, empty_clause):
+    """
+        F is the formula
+        G are all not-trivially-subsumed reachable resolvents
+        P is {C : [D, E if res(D, E) = C]}
+
+        finds the shortest proof of F, assuming F is minimally unsatisfiable
+    """
     r = len(G)
     m = len(F.clauses)
+    subsumers = {C : frozenset(D for D in range(r) if G[D] < G[C]) for C in range(r)}
+    AD = all_derivations(empty_clause, P, subsumers, m)
+    s = 10**6
+    mD = None
+    for D in AD:
+        if len(D) < s:
+            s = len(D)
+            mD = D
+    return mD
     # O is the open set of vertices whose all derivations have been found, but
     # which have not been processed yet
-    O = [C for C in range(m, r) if len(P[C]) == 0]
-    CL = {range(m)}
-    # L storest a list of derivations as sets of clauses for every clause (excluding the target)
-    L = defaultdict(list)
-    while O:
-        C = O.pop()
+    #O = [C for C in range(m, r) if len(P[C]) == 0]
+    #CL = {range(m)}
+    ## L storest a list of derivations as sets of clauses for every clause (excluding the target and axioms)
+    #L = defaultdict(list)
+    #while O:
+    #    C = O.pop()
         
 
 def enumerate_resolvents(F):
@@ -1413,6 +1530,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
 
     t_begin = perf_counter()
 
+    assumptions=None
     if options.enc == "traditional":
         if var_orbits != None:
             # if we're specifying variable orbits, we must be looking for a proof of exact length for
@@ -1527,7 +1645,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None, G=None, parents=None, empty_clause=None):
+def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None, G=None, parents=None, empty_clause=None, var_orbits=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1577,7 +1695,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
     t = 0.0
     t0 = perf_counter()
     try:
-        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause)
+        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits)
         while ans == False:
             query_time[u] = t
             if options.verbosity >= 1:
@@ -1587,9 +1705,13 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
             u += 1
             if time_budget != None:
                 time_budget -= int(t)
-            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause)
+            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits)
     except pysolvers.error:
-        # TODO: check if output goes to terminal, print a blank line if yes
+        if options.verbosity >= 1 and sys.stdout.isatty():
+            print(end="\r")
+            print("* Aborted.")
+            print(f"* No answer for length {u}")
+            print("--------------------------------------")
         t = perf_counter() - t0
         ans = None
 
@@ -1601,7 +1723,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
         if ans == True:
             print(f"* Shortest proof found: {u}")
         elif ans == None:
-            print(f"* Time out. Lower bound:{u}")
+            print(f"* Time out. Lower bound: {u}")
 
     if ans == True:
         machine_summary += f",OPT,{u},{t_end-t_begin:.2f}"
@@ -1760,6 +1882,9 @@ def main():
             print("ERROR: cannot derive the empty clause; input satisfiable?")
             sys.exit(-1)
         #heuristic_lb(F, G, P, empty_clause)
+        proof = direct_shortest_proof(F, G, P, empty_clause)
+        print(proof)
+        print(len(proof))
 
     if options.test:
         # test the correctness of lower bounds produce by --has
