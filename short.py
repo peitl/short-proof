@@ -715,6 +715,51 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
     if known_lower_bound != None:
         redundant_clauses += [[-empty(known_lower_bound-2)]]
 
+    # TODO: turned off for now, because large and not that performant
+    ## for saturated formulas: require that extending "phantom" literals propagate all the way down
+    ## phantom variable v added to axiom k occurs in clause i
+    #def phos(i, k, v):
+    #    return vp.id(f"phantom_pos[{i},{k},{v}]")
+    #def pheg(i, k, v):
+    #    return vp.id(f"phantom_neg[{i},{k},{v}]")
+    #def phos_carry(i, j, k, v):
+    #    return vp.id(f"phantom_pos_carry[{i},{j},{k},{v}]")
+    #def pheg_carry(i, j, k, v):
+    #    return vp.id(f"phantom_neg_carry[{i},{j},{k},{v}]")
+
+    #Fset = [set(C) for C in F.clauses]
+    #phars_pos = [(k, v) for k in range(m) for v in variables if  v not in Fset[k]]
+    #phars_neg = [(k, v) for k in range(m) for v in variables if -v not in Fset[k]]
+
+    #phantom_init = [[phos(k, k, v)] for k, v in phars_pos] + [[pheg(k, k, v)] for k, v in phars_neg]
+
+    #phantom_propagation =\
+    #        [[-pos(i, v), -phos(i, k, v)] for i in range(s) for k, v in phars_pos] +\
+    #        [[-neg(i, v), -pheg(i, k, v)] for i in range(s) for k, v in phars_neg] +\
+    #        [ 
+    #            C for j in range(m, s) for i in range(j) for k, v in phars_pos for C in [
+    #                [-phos(i, k, v), -arc(i, j), phos_carry(i, j, k, v)],
+    #                [ phos(i, k, v), -phos_carry(i, j, k, v)],
+    #                [ arc(i, j), -phos_carry(i, j, k, v)]
+    #            ]
+    #        ] + [
+    #            C for j in range(m, s) for i in range(j) for k, v in phars_neg for C in [
+    #                [-pheg(i, k, v), -arc(i, j), pheg_carry(i, j, k, v)],
+    #                [ pheg(i, k, v), -pheg_carry(i, j, k, v)],
+    #                [ arc(i, j), -pheg_carry(i, j, k, v)]
+    #            ]
+    #        ] + [
+    #            [-phos(j, k, v)] + [phos_carry(i, j, k, v) for i in range(j)]
+    #            for j in range(m, s) for k, v in phars_pos
+    #        ] + [
+    #            [-pheg(j, k, v)] + [pheg_carry(i, j, k, v) for i in range(j)]
+    #            for j in range(m, s) for k, v in phars_neg
+    #        ]
+
+    #phantom_end = [[phos(s-1, k, v)] for k, v in phars_pos] + [[pheg(s-1, k, v)] for k, v in phars_neg]
+
+    #redundant_clauses += phantom_init + phantom_propagation + phantom_end
+
     return redundant_clauses
 
 def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
