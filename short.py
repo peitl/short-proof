@@ -76,25 +76,11 @@ class Formula:
             for u in self.univars:
                 self.unideps[u] |= new_free_vars
 
-def internal_parallel_solve(solver_name, clauses, time_limit):
+def internal_single_solve(solver_name, clauses):
     solver = Solver(name=solver_name, bootstrap_with=clauses, use_timer=True)
-    ans = None
-    model = None
-    if time_limit != None:
-        timer = Timer(time_limit, self.interrupt)
-        timer.start()
-
-        ans = solver.solve_limited(expect_interrupt=True)
-
-        if ans != None:
-            timer.cancel()
-    else:
-        ans = solver.solve()
-    if ans == True:
-        model = solver.get_model()
-    time = solver.time()
-    solver.delete()
-    return ans, model, time
+    ans = solver.solve()
+    model = solver.get_model() if ans == True else None
+    return ans, model, solver.time()
 
 class SolverWrapper:
     internal_solvers = {
@@ -119,49 +105,78 @@ class SolverWrapper:
     def interrupt(self):
         self.solver.interrupt()
 
+    def internal_parallel_solve(self, assumptions_list):
+        #print(f"Executing {len(assumptions)} process" + "es" if len(assumptions) > 1 else "")
+        answers_async = [None for a in assumptions_list]
+        with Pool() as p:
+            def terminate_others(val):
+                if val == True:
+                    p.terminate()
+            for i, assumptions in enumerate(assumptions_list):
+                answers_async[i] = p.apply_async(
+                        internal_single_solve,
+                        (
+                            self.solver_name,
+                            self.clauses + [[x] for x in assumptions]
+                        ),
+                        callback=lambda val: terminate_others(val[0]))
+            p.close()
+            p.join()
+        answers = [answer_async.get() for answer_async in answers_async if answer_async.ready()]
+        ans = False
+        time = 0.0
+        model = None
+        total_time = 0.0
+        for pans, pmodel, ptime in answers:
+            time = max(time, ptime)
+            total_time += ptime
+            if pans == True:
+                ans = True
+                model = pmodel
+            if pans == None and ans == False:
+                ans = None
+        print(f"* Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
+        return ans, model, time
+
+    #TODO: implement time limit
+    def internal_sequential_solve(self, assumptions_list):
+        """
+            solve with each assumption set from the list in turn,
+            looking for the max value (i.e. terminate upon the first SAT answer)
+        """
+        solver = Solver(name=self.solver_name, bootstrap_with=self.clauses, use_timer=True)
+        ans = None
+        model = None
+        time = 0.0
+        for i, assumptions in enumerate(assumptions_list):
+            #if time_limit != None:
+            #    timer = Timer(time_limit, self.interrupt)
+            #    timer.start()
+
+            #    ans = solver.solve_limited(expect_interrupt=True)
+
+            #    if ans != None:
+            #        timer.cancel()
+            ans = solver.solve(assumptions=assumptions)
+            time += solver.time()
+            if len(assumptions_list) > 1:
+                print(f"solved assumption {i+1} in {solver.time():.2f} sec")
+            if ans == True:
+                break
+        if ans == True:
+            model = solver.get_model()
+        solver.delete()
+        if len(assumptions_list) > 1:
+            print(f"* Solved query {self.query} with answer {ans} in {time:.2f} sec")
+        return ans, model, time
+
     def solve(self, time_limit = None, assumptions = None):
         if self.solver_name in self.internal_solvers:
             if assumptions == None:
-                self.ans, self.model, self.time = internal_parallel_solve(self.solver_name, self.clauses, time_limit)
+                self.ans, self.model, self.time = internal_single_solve(self.solver_name, self.clauses)
             else:
-                #print(f"Executing {len(assumptions)} process" + "es" if len(assumptions) > 1 else "")
-                answers_async = [None for a in assumptions]
-                with Pool() as p:
-                    def terminate_others(val):
-                        if val == True:
-                            #print("a process found a proof, terminating others")
-                            p.terminate()
-                        #elif val == False:
-                        #    print("a process proved a lower bound, waiting for others")
-                    for i, assumption in enumerate(assumptions):
-                        answers_async[i] = p.apply_async(
-                                internal_parallel_solve,
-                                (
-                                    self.solver_name,
-                                    self.clauses + [[a] for a in assumption],
-                                    None
-                                ),
-                                callback=lambda val: terminate_others(val[0]))
-                    p.close()
-                    p.join()
-                answers = [answer_async.get() for answer_async in answers_async if answer_async.ready()]
-                #print(f"done (with {len(answers)} answers)")
-                #print([(ans, time) for ans, model, time in answers])
-                self.ans = False
-                self.time = 0.0
-                total_time = 0.0
-                for ans, model, time in answers:
-                    self.time = max(self.time, time)
-                    total_time += time
-                    if ans == True:
-                        self.ans = True
-                        self.model = model
-                        self.time = time
-                        break
-                    if ans == None:
-                        self.ans = None                      
-                print(f"* Solved query {self.query} with answer {self.ans} in {self.time:.2f} sec ({total_time:.2f} sec total work)")
-
+                #self.ans, self.model, self.time = self.internal_sequential_solve(assumptions)
+                self.ans, self.model, self.time = self.internal_parallel_solve(assumptions)
         else:
             # write the clauses into a temporary CNF file, then
             # call  solver_name  as a subprocess,
@@ -762,7 +777,7 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
 
     return redundant_clauses
 
-def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
+def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
 
     pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
@@ -864,11 +879,17 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
 
     assumptions = None
     if var_orbits != None:
+
+        for i in range(4, 6):
+            symbreak += CardEnc.atmost(
+                    [pos(s-1-i, v) for v in variables] +
+                    [neg(s-1-i, v) for v in variables],
+                    i-2, vpool=vp).clauses
+
         assumptions = []
-        for O in var_orbits:
+        for i, O in enumerate(var_orbits):
             v = O[0]
-            assumptions.append(
-                    [
+            fix_last_resolution = [
                         neg(s-2, v),
                         pos(s-3, v)
                     ] + [
@@ -880,7 +901,21 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
                     ] + [
                         -neg(s-2, w) for w in variables if v != w
                     ] + [arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]
-                )
+            if sub_orbits == None:
+                assumptions.append(fix_last_resolution)
+            else:
+                SOR = {SO[0] for SO in sub_orbits[i]} | {v}
+                assumptions.append(fix_last_resolution +
+                        [-pos(s-4, x) for x in variables if x not in SOR] +
+                        [-neg(s-4, x) for x in variables if x not in SOR]
+                        )
+                #for SO in sub_orbits[i]:
+                #    w = SO[0]
+                #    #assumptions.append(fix_last_resolution + [piv(s-2, SO[0])])
+                #    assumptions.append(fix_last_resolution +
+                #            [-pos(s-4, x) for x in variables if x not in {v, w}] +
+                #            [-neg(s-4, x) for x in variables if x not in {v, w}]
+                #            )
                         
 
 
@@ -904,12 +939,6 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None):
     # derived much earlier?) all variables always contain a variable from every orbit, so that's an overapprox.
     #symbreak += [[neg(s-2, v) for v in variables]]
     #symbreak += [[neg(s-2, variables[0])]]
-
-    #for i in range(1, 3):
-    #    symbreak += CardEnc.atmost(
-    #            [pos(s-1-i, v) for v in variables] +
-    #            [neg(s-1-i, v) for v in variables],
-    #            i, vpool=vp).clauses
 
     return symbreak, assumptions
 
@@ -1019,7 +1048,7 @@ def symmetry_breaking(F, s, is_mu, vp, var_orbits=None):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None):
+def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None, sub_orbits=None):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -1065,7 +1094,7 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbit
     symbreak = None
     assumptions = None
     if ldq == False:
-        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits)
+        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits, sub_orbits=sub_orbits)
     else:
         symbreak = symmetry_breaking(F, s, is_mu, vp, var_orbits=var_orbits)
 
@@ -1546,7 +1575,7 @@ def get_found_proof(model, F, s, vp):
 
 #def has_short_proof(F, s, is_mu, options, time_limit = None, known_lower_bound=None):
 #    pass
-def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=None, P=None, empty_clause=None, var_orbits=None):
+def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=None, P=None, empty_clause=None, var_orbits=None, sub_orbits=None):
     """
     Searches for a resolution proof of F of length s, where
         l <= s <= u
@@ -1588,7 +1617,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
                 print(f"         when variable orbits are calculated and proof suffix is fixed, length must be exact", file=sys.stderr)
                 print(f"         setting l={u}", file=sys.stderr)
                 l = u
-        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits)
+        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits, sub_orbits=sub_orbits)
     elif options.enc == "projected":
         query_clauses, vp = get_query_abstract(F, G, P, empty_clause, u, is_mu, known_lower_bound=l)
 
@@ -1690,7 +1719,7 @@ def count_short_proofs(F, s, is_mu, options):
     return proofs
 
 
-def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None, G=None, parents=None, empty_clause=None, var_orbits=None):
+def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bound=None, time_budget=None, G=None, parents=None, empty_clause=None, var_orbits=None, sub_orbits=None):
     """
     This function takes a CNF formula f and by asking queries
     to has_short_proof determines the shortest proof that f has.
@@ -1740,7 +1769,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
     t = 0.0
     t0 = perf_counter()
     try:
-        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits)
+        ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits, sub_orbits=sub_orbits)
         while ans == False:
             query_time[u] = t
             if options.verbosity >= 1:
@@ -1750,7 +1779,7 @@ def find_shortest_proof(F, is_mu, options=Options(), lower_bound=None, upper_bou
             u += 1
             if time_budget != None:
                 time_budget -= int(t)
-            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits)
+            ans, P, s, t = has_short_proof(F, l, u, is_mu=is_mu, options=options, time_limit=time_budget, G=G, P=parents, empty_clause=empty_clause, var_orbits=var_orbits, sub_orbits=sub_orbits)
     except pysolvers.error:
         if options.verbosity >= 1 and sys.stdout.isatty():
             print(end="\r")
