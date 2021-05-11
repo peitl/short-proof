@@ -802,6 +802,11 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
             bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(s-j), vpool=vp).clauses
         redundant_clauses += def_active + init_active + bound_active
 
+    # TODO: only do for irreducible formulas (i.e. assuming irreduciblity)
+    no_axiom_cut = [[-arc(i, m), -arc(j, m), active(i, m+1), active(j, m+1)] for i in range(m) for j in range(i, m)]
+
+    redundant_clauses += no_axiom_cut
+
     return redundant_clauses
 
 def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
