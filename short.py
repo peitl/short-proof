@@ -4,6 +4,7 @@ from pysat.card import CardEnc, EncType
 from pysat.formula import CNF, IDPool
 from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
 from time import perf_counter, time, sleep
+from datetime import datetime
 from random import shuffle
 from collections import defaultdict
 from bisect import bisect
@@ -136,7 +137,7 @@ class SolverWrapper:
                 model = pmodel
             if pans == None and ans == False:
                 ans = None
-        print(f"* Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
+        print(f"* [{datetime.now():%d.%m.%Y %H:%M:%S}] Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
         return ans, model, time
 
     #TODO: implement time limit
