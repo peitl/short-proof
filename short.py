@@ -6,6 +6,7 @@ from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
 from time import perf_counter, time, sleep
 from random import shuffle
 from collections import defaultdict
+from bisect import bisect
 import pysolvers
 
 import sys, os
@@ -774,6 +775,32 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
     #phantom_end = [[phos(s-1, k, v)] for k, v in phars_pos] + [[pheg(s-1, k, v)] for k, v in phars_neg]
 
     #redundant_clauses += phantom_init + phantom_propagation + phantom_end
+
+    if known_lower_bound == s:
+        # place bounds on the number of active clauses depending on the stage of the proof
+        def active(i, j):
+            return vp.id(f"active[{i},{j}]")
+
+        def hardness_bound(j):
+            #return [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11][bisect([1, 2, 3, 4, 6, 8, 10, 12, 14, 17], j)]
+            return bisect([1, 2, 3, 4, 6, 8, 10, 12, 14, 17], j) + 1
+
+        def_active = [
+                        [-active(i, j)] + [arc(i, k) for k in range(j, s)]
+                            for j in range(m, s)
+                                for i in range(j)
+                    ]# + [
+                     #   [active(i, j), -arc(i, k)]
+                     #       for j in range(m, s)
+                     #           for i in range(j)
+                     #               for k in range(j, s)
+        init_active = [[active(i, m) for i in range(m)]]
+
+        bound_active = []
+        for j in range(m, s):
+            #print(f"{j} : {s-j} : {hardness_bound(s-j)}")
+            bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(s-j), vpool=vp).clauses
+        redundant_clauses += def_active + init_active + bound_active
 
     return redundant_clauses
 
