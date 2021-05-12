@@ -110,7 +110,7 @@ class SolverWrapper:
     def internal_parallel_solve(self, assumptions_list):
         #print(f"Executing {len(assumptions)} process" + "es" if len(assumptions) > 1 else "")
         answers_async = [None for a in assumptions_list]
-        with Pool() as p:
+        with Pool(len(assumptions_list)) as p:
             def terminate_others(val):
                 if val == True:
                     p.terminate()
