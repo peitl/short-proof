@@ -777,7 +777,7 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
 
     #redundant_clauses += phantom_init + phantom_propagation + phantom_end
 
-    if known_lower_bound == s:
+    if known_lower_bound != None:
         # place bounds on the number of active clauses depending on the stage of the proof
         def active(i, j):
             return vp.id(f"active[{i},{j}]")
@@ -795,18 +795,20 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
                      #       for j in range(m, s)
                      #           for i in range(j)
                      #               for k in range(j, s)
-        init_active = [[active(i, m) for i in range(m)]]
+        if is_mu:
+            init_active = [[active(i, m) for i in range(m)]]
 
         bound_active = []
-        for j in range(m, s):
+        for j in range(m, known_lower_bound):
             #print(f"{j} : {s-j} : {hardness_bound(s-j)}")
-            bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(s-j), vpool=vp).clauses
+            bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(known_lower_bound-j), vpool=vp).clauses
         redundant_clauses += def_active + init_active + bound_active
 
-    # TODO: only do for irreducible formulas (i.e. assuming irreduciblity)
-    no_axiom_cut = [[-arc(i, m), -arc(j, m), active(i, m+1), active(j, m+1)] for i in range(m) for j in range(i, m)]
+        # TODO: only do for irreducible formulas (i.e. assuming irreduciblity)
+        no_axiom_cut = [[-arc(i, m), -arc(j, m), active(i, m+1), active(j, m+1)] for i in range(m) for j in range(i+1, m)]
 
-    redundant_clauses += no_axiom_cut
+        redundant_clauses += no_axiom_cut
+
 
     return redundant_clauses
 
