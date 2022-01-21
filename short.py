@@ -846,7 +846,7 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
     # the last clause on which the lex ordering should be enforced
     last = s-1
     if var_orbits != None:
-        last = s-3
+        last = s-4
 
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
