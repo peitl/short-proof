@@ -846,7 +846,7 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
     # the last clause on which the lex ordering should be enforced
     last = s-1
     if var_orbits != None:
-        last = s-4
+        last = s-3
 
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
@@ -936,14 +936,15 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
                     ] + [
                         -neg(s-2, w) for w in variables if v != w
                     ] + [arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]
-            if sub_orbits == None:
-                assumptions.append(fix_last_resolution)
-            else:
-                SOR = {SO[0] for SO in sub_orbits[i]} | {v}
-                assumptions.append(fix_last_resolution +
-                        [-pos(s-4, x) for x in variables if x not in SOR] +
-                        [-neg(s-4, x) for x in variables if x not in SOR]
-                        )
+            assumptions.append(fix_last_resolution)
+            #if sub_orbits == None:
+            #    assumptions.append(fix_last_resolution)
+            #else:
+            #    SOR = {SO[0] for SO in sub_orbits[i]} | {v}
+            #    assumptions.append(fix_last_resolution +
+            #            [-pos(s-4, x) for x in variables if x not in SOR] +
+            #            [-neg(s-4, x) for x in variables if x not in SOR]
+            #            )
                 #for SO in sub_orbits[i]:
                 #    w = SO[0]
                 #    #assumptions.append(fix_last_resolution + [piv(s-2, SO[0])])
