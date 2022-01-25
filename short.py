@@ -18,13 +18,14 @@ import functools
 
 from threading import Timer
 from multiprocessing import Pool
+from typing import List
 
 machine_summary = ""
 
 def info(msg : str):
     print(f"short.py INFO {datetime.now():%d.%m.%Y %H:%M:%S}: {msg}")
 
-def bulk_info(msg_list : list[str]):
+def bulk_info(msg_list : List[str]):
     for msg in msg_list:
         info(msg)
 
