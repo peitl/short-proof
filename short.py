@@ -21,6 +21,13 @@ from multiprocessing import Pool
 
 machine_summary = ""
 
+def info(msg : str):
+    print(f"short.py INFO {datetime.now():%d.%m.%Y %H:%M:%S}: {msg}")
+
+def bulk_info(msg_list : list[str]):
+    for msg in msg_list:
+        info(msg)
+
 # convenience class to specify options for library usage
 class Options:
     def __init__(self):
@@ -139,7 +146,8 @@ class SolverWrapper:
                 model = pmodel
             if pans == None and ans == False:
                 ans = None
-        print(f"* [{datetime.now():%d.%m.%Y %H:%M:%S}] Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
+        info(f"Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
+        #print(f"* [{datetime.now():%d.%m.%Y %H:%M:%S}] Solved query {self.query} with answer {ans} in {time:.2f} sec ({total_time:.2f} sec total work)")
         return ans, model, time
 
     #TODO: implement time limit
@@ -171,14 +179,14 @@ class SolverWrapper:
             model = solver.get_model()
         solver.delete()
         if len(assumptions_list) > 1:
-            print(f"* Solved query {self.query} with answer {ans} in {time:.2f} sec")
+            info(f"Solved query {self.query} with answer {ans} in {time:.2f} sec")
         return ans, model, time
 
     def solve(self, time_limit = None, assumptions = None):
         if self.solver_name in self.internal_solvers:
             if assumptions == None:
                 self.ans, self.model, self.time = internal_single_solve(self.solver_name, self.clauses)
-                print(f"* [{datetime.now():%d.%m.%Y %H:%M:%S}] Solved query {self.query} with answer {self.ans} in {self.time:.2f} sec")
+                info(f"Solved query {self.query} with answer {self.ans} in {self.time:.2f} sec")
             else:
                 #self.ans, self.model, self.time = self.internal_sequential_solve(assumptions)
                 self.ans, self.model, self.time = self.internal_parallel_solve(assumptions)
