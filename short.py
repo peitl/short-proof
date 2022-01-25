@@ -30,6 +30,8 @@ class Options:
         self.ldq = False
         self.cnf = ""
         self.enc = "traditional"
+        self.orbit_mode = "parallel"
+        self.suborbit_mode = "parallel"
 
 class Formula:
     def __init__(self, clauses=None):
@@ -176,6 +178,7 @@ class SolverWrapper:
         if self.solver_name in self.internal_solvers:
             if assumptions == None:
                 self.ans, self.model, self.time = internal_single_solve(self.solver_name, self.clauses)
+                print(f"* [{datetime.now():%d.%m.%Y %H:%M:%S}] Solved query {self.query} with answer {self.ans} in {self.time:.2f} sec")
             else:
                 #self.ans, self.model, self.time = self.internal_sequential_solve(assumptions)
                 self.ans, self.model, self.time = self.internal_parallel_solve(assumptions)
@@ -812,7 +815,7 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
 
     return redundant_clauses
 
-def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
+def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None, orbit_mode=None, suborbit_mode=None):
 
     pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
@@ -845,8 +848,10 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
 
     # the last clause on which the lex ordering should be enforced
     last = s-1
-    if var_orbits != None:
+    if var_orbits != None and orbit_mode != None:
         last = s-3
+        if sub_orbits != None and suborbit_mode != None:
+            last = s-4
 
     def leq(i, j, v):
         return vp.id(f"leq[{i},{j},{v}]")
@@ -913,45 +918,68 @@ def symmetry_breaking_v(F, s, is_mu, vp, var_orbits=None, sub_orbits=None):
             symbreak.append([empty(i), -leq_upto(i, j, variables[-1])])
 
     assumptions = None
-    if var_orbits != None:
+    if var_orbits != None and orbit_mode != None:
 
+        # TODO I don't think this is entirely sound with s-1-i instead of s-i...
         for i in range(4, 6):
             symbreak += CardEnc.atmost(
-                    [pos(s-1-i, v) for v in variables] +
-                    [neg(s-1-i, v) for v in variables],
+                    [pos(s-i, v) for v in variables] +
+                    [neg(s-i, v) for v in variables],
                     i-2, vpool=vp).clauses
 
-        assumptions = []
-        for i, O in enumerate(var_orbits):
-            v = O[0]
-            fix_last_resolution = [
-                        neg(s-2, v),
-                        pos(s-3, v)
-                    ] + [
-                        -pos(s-2, w) for w in variables
-                    ] + [
-                        -neg(s-3, w) for w in variables
-                    ] + [
-                        -pos(s-3, w) for w in variables if v != w
-                    ] + [
-                        -neg(s-2, w) for w in variables if v != w
-                    ] + [arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]
-            assumptions.append(fix_last_resolution)
-            #if sub_orbits == None:
-            #    assumptions.append(fix_last_resolution)
-            #else:
-            #    SOR = {SO[0] for SO in sub_orbits[i]} | {v}
-            #    assumptions.append(fix_last_resolution +
-            #            [-pos(s-4, x) for x in variables if x not in SOR] +
-            #            [-neg(s-4, x) for x in variables if x not in SOR]
-            #            )
-                #for SO in sub_orbits[i]:
-                #    w = SO[0]
-                #    #assumptions.append(fix_last_resolution + [piv(s-2, SO[0])])
-                #    assumptions.append(fix_last_resolution +
-                #            [-pos(s-4, x) for x in variables if x not in {v, w}] +
-                #            [-neg(s-4, x) for x in variables if x not in {v, w}]
-                #            )
+        if orbit_mode == "parallel":
+            assumptions = []
+            for i, O in enumerate(var_orbits):
+                v = O[0]
+                fix_last_resolution = [
+                            neg(s-2, v),
+                            pos(s-3, v)
+                        ] + [
+                            -pos(s-2, w) for w in variables
+                        ] + [
+                            -neg(s-3, w) for w in variables
+                        ] + [
+                            -pos(s-3, w) for w in variables if v != w
+                        ] + [
+                            -neg(s-2, w) for w in variables if v != w
+                        ] + [arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]
+                if sub_orbits == None:
+                    assumptions.append(fix_last_resolution)
+                else:
+                    if suborbit_mode == None:
+                        assumptions.append(fix_last_resolution)
+                    elif suborbit_mode == "parallel":
+                        for SO in sub_orbits[i]:
+                            w = SO[0]
+                            assumptions.append(fix_last_resolution +
+                                    [-pos(s-4, x) for x in variables if x not in {v, w}] +
+                                    [-neg(s-4, x) for x in variables if x not in {v, w}]
+                                    )
+                    elif suborbit_mode == "sequential":
+                        SOR = {SO[0] for SO in sub_orbits[i]} | {v}
+                        assumptions.append(fix_last_resolution +
+                                [-pos(s-4, x) for x in variables if x not in SOR] +
+                                [-neg(s-4, x) for x in variables if x not in SOR]
+                                )
+        elif orbit_mode == "sequential":
+            OR = {O[0] for O in var_orbits}
+            #fix_last_resolution =\
+            symbreak += \
+                    [[-pos(s-2, x)] for x in variables               ] +\
+                    [[-neg(s-2, x)] for x in variables if x not in OR] +\
+                    [[-pos(s-3, x)] for x in variables if x not in OR] +\
+                    [[-neg(s-3, x)] for x in variables               ] +\
+                    [[arc(s-2, s-1), arc(s-3, s-1), -arc(s-3, s-2)]] +\
+                    [[piv(s-1, x) for x in OR]] +\
+                    [[-pos(s-3, x),  neg(s-2, x)] for x in OR] +\
+                    [[ pos(s-3, x), -neg(s-2, x)] for x in OR]
+            if sub_orbits != None and suborbit_mode != None: # sequential var orbit mode cannot be combined with parallel sub orbit mode (TODO check why)
+                SOR = {SO[0] for i in range(len(var_orbits)) for SO in sub_orbits[i]}
+                symbreak += \
+                        [[-pos(s-4, x)] for x in variables if x not in SOR] +\
+                        [[-neg(s-4, x)] for x in variables if x not in SOR]
+
+
                         
 
 
@@ -1084,7 +1112,7 @@ def symmetry_breaking(F, s, is_mu, vp, var_orbits=None):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None, sub_orbits=None):
+def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None, sub_orbits=None, orbit_mode=None, suborbit_mode=None):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -1130,7 +1158,7 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbit
     symbreak = None
     assumptions = None
     if ldq == False:
-        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits, sub_orbits=sub_orbits)
+        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=orbit_mode, suborbit_mode=suborbit_mode)
     else:
         symbreak = symmetry_breaking(F, s, is_mu, vp, var_orbits=var_orbits)
 
@@ -1653,7 +1681,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
                 print(f"         when variable orbits are calculated and proof suffix is fixed, length must be exact", file=sys.stderr)
                 print(f"         setting l={u}", file=sys.stderr)
                 l = u
-        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits, sub_orbits=sub_orbits)
+        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=options.orbit_mode, suborbit_mode=options.suborbit_mode)
     elif options.enc == "projected":
         query_clauses, vp = get_query_abstract(F, G, P, empty_clause, u, is_mu, known_lower_bound=l)
 
