@@ -23,7 +23,7 @@ from typing import List
 machine_summary = ""
 
 def info(msg : str):
-    print(f"short.py INFO {datetime.now():%d.%m.%Y %H:%M:%S}: {msg}")
+    print(f"short.py INFO {datetime.now():%d.%m.%Y %H:%M:%S}: {msg}", flush=True)
 
 def bulk_info(msg_list : List[str]):
     for msg in msg_list:
