@@ -40,6 +40,7 @@ class Options:
         self.enc = "traditional"
         self.orbit_mode = "parallel"
         self.suborbit_mode = "parallel"
+        self.no_sir = False # do not assume strong irreducibility
 
 class Formula:
     def __init__(self, clauses=None):
@@ -674,7 +675,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
 
     return axiom_placement
 
-def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbits=None):
+def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbits=None, no_sir=False):
 
     variables = sorted(F.exivars | F.univars)
     n = len(variables)
@@ -816,11 +817,8 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
             bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(known_lower_bound-j), vpool=vp).clauses
         redundant_clauses += def_active + init_active + bound_active
 
-        # TODO: only do for irreducible formulas (i.e. assuming irreduciblity)
-        no_axiom_cut = [[-arc(i, m), -arc(j, m), active(i, m+1), active(j, m+1)] for i in range(m) for j in range(i+1, m)]
-
-        redundant_clauses += no_axiom_cut
-
+        if not no_sir:
+            redundant_clauses += [[-arc(i, m), -arc(j, m), active(i, m+1), active(j, m+1)] for i in range(m) for j in range(i+1, m)]
 
     return redundant_clauses
 
@@ -1121,7 +1119,7 @@ def symmetry_breaking(F, s, is_mu, vp, var_orbits=None):
     return symbreak
 
 
-def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None, sub_orbits=None, orbit_mode=None, suborbit_mode=None):
+def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbits=None, sub_orbits=None, orbit_mode=None, suborbit_mode=None, no_sir=False):
     """
     This function takes a CNF formula F and an integer s,
     and returns clauses that encode the statement:
@@ -1158,7 +1156,7 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbit
 
     ############### REDUNDANCY ###############
 
-    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=known_lower_bound)
+    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=known_lower_bound, no_sir=no_sir)
 
     ############### SYMMETRY BREAKING ###############
 
@@ -1690,7 +1688,7 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
                 print(f"         when variable orbits are calculated and proof suffix is fixed, length must be exact", file=sys.stderr)
                 print(f"         setting l={u}", file=sys.stderr)
                 l = u
-        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=options.orbit_mode, suborbit_mode=options.suborbit_mode)
+        query_clauses, vp, max_orig_var, assumptions = get_query(F, u, is_mu, options.cardnum, options.ldq, known_lower_bound=l, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=options.orbit_mode, suborbit_mode=options.suborbit_mode, no_sir=options.no_sir)
     elif options.enc == "projected":
         query_clauses, vp = get_query_abstract(F, G, P, empty_clause, u, is_mu, known_lower_bound=l)
 
