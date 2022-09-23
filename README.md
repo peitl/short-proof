@@ -15,4 +15,4 @@ See `./short.py -h` for more options. In particular, `-v` may be useful to see i
 
 ## Citing
 
-Please cite our 2021 [JAIR paper](https://jair.org/index.php/jair/article/view/12589)([bibtex](https://dblp.org/rec/journals/jair/PeitlS21.html?view=bibtex)).
+Please cite our 2021 [JAIR paper](https://jair.org/index.php/jair/article/view/12589) ([bibtex](https://dblp.org/rec/journals/jair/PeitlS21.html?view=bibtex)).
