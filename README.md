@@ -1,4 +1,4 @@
-# short-proof
+# Short Proof Finder
 
 A SAT-based tool to compute shortest proofs of propositional and QBF formulas in resolution-based proof systems.
 For propositional formulas, the shortest resolution proof is computed.
@@ -12,3 +12,7 @@ Usage: `./short.py <cnf.dimacs>` (you may need to make the file executable).
 Use `--query s F` to output a CNF formula `short_s(F)` that encodes the question whether F has a resolution refutation of length at most s.
 
 See `./short.py -h` for more options. In particular, `-v` may be useful to see intermediate lower bounds.
+
+## Citing
+
+Please cite our 2021 [JAIR paper](https://jair.org/index.php/jair/article/view/12589)([bibtex](https://dblp.org/rec/journals/jair/PeitlS21.html?view=bibtex)).
