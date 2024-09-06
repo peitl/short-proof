@@ -2,7 +2,8 @@
 
 from pysat.card import CardEnc, EncType
 from pysat.formula import CNF, IDPool
-from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22, Cadical
+from pysat.solvers import Solver, Lingeling, Glucose4, Minisat22
+from pysat.solvers import Cadical153 as Cadical
 from time import perf_counter, time, sleep
 from datetime import datetime
 from random import shuffle
@@ -90,7 +91,10 @@ class Formula:
                 self.unideps[u] |= new_free_vars
 
 def internal_single_solve(solver_name, clauses):
-    solver = Solver(name=solver_name, bootstrap_with=clauses, use_timer=True)
+    if solver_name == "cadical":
+        solver = Cadical(bootstrap_with=clauses, use_timer=True)
+    else:
+        solver = Solver(name=solver_name, bootstrap_with=clauses, use_timer=True)
     ans = solver.solve()
     model = solver.get_model() if ans == True else None
     return ans, model, solver.time()
@@ -650,6 +654,7 @@ def axiom_placement_clauses(F, s, is_mu, vp):
     n = len(variables)
     m = len(F.clauses)
     axioms = range(m)
+    proof_clauses = range(s)
     pos, neg, empty, piv, ax, isax, arc, exarc, upos, uneg, poscarry, negcarry, posdrop, negdrop =\
             make_predicates(vp)
 
@@ -795,6 +800,8 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
         def active(i, j):
             return vp.id(f"active[{i},{j}]")
 
+        hnum = [math.inf,1,3,5,7,10,13,16,19,22,26]
+
         def hardness_bound(j):
             #return [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11][bisect([1, 2, 3, 4, 6, 8, 10, 12, 14, 17], j)]
             return bisect([1, 2, 3, 4, 6, 8, 10, 12, 14, 17], j) + 1
@@ -810,11 +817,23 @@ def redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=None, var_orbit
                      #               for k in range(j, s)
         if is_mu:
             init_active = [[active(i, m) for i in range(m)]]
+        else:
+            init_active = []
 
         bound_active = []
         for j in range(m, known_lower_bound):
             #print(f"{j} : {s-j} : {hardness_bound(s-j)}")
-            bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=hardness_bound(known_lower_bound-j), vpool=vp).clauses
+            bound = hardness_bound(known_lower_bound-j)
+            if bound > j:
+                # this and all following queries will be trivially unsatisfiable.
+                # indicates a bug, a previous query was already supposed to find a proof
+                print(f"ERROR: the purported known lower bound {known_lower_bound} is in conflict with a resolution hardness number")
+                print(f"       every formula with {j} clauses has a proof of length at most {hnum[j]}")
+                print(f"       this most likely occurred because the encoding falsely assumed strong irreducibility")
+                print(f"       try invoking with --no-sir")
+                print(f"       aborting now")
+                return None
+            bound_active += CardEnc.atleast([active(i, j) for i in range(j)], bound=bound, vpool=vp).clauses
         redundant_clauses += def_active + init_active + bound_active
 
         if not no_sir:
@@ -1154,20 +1173,7 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbit
 
     essential_clauses = essentials(F, s, is_mu, vp, ldq)
 
-    ############### REDUNDANCY ###############
-
-    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=known_lower_bound, no_sir=no_sir)
-
-    ############### SYMMETRY BREAKING ###############
-
     axiom_placement = axiom_placement_clauses(F, s, is_mu, vp)
-
-    symbreak = None
-    assumptions = None
-    if ldq == False:
-        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=orbit_mode, suborbit_mode=suborbit_mode)
-    else:
-        symbreak = symmetry_breaking(F, s, is_mu, vp, var_orbits=var_orbits)
 
     all_clauses =\
             definition_clauses +\
@@ -1175,6 +1181,22 @@ def get_query(F, s, is_mu, card_encoding, ldq, known_lower_bound=None, var_orbit
             axiom_placement
 
     max_orig_var = maxvar(all_clauses)
+
+    ############### REDUNDANCY ###############
+
+    redundant_clauses = redundancy(F, s, is_mu, vp, card_encoding, known_lower_bound=known_lower_bound, no_sir=no_sir)
+
+    if redundant_clauses == None:
+        return None, vp, max_orig_var, []
+
+    ############### SYMMETRY BREAKING ###############
+
+    symbreak = None
+    assumptions = None
+    if ldq == False:
+        symbreak, assumptions = symmetry_breaking_v(F, s, is_mu, vp, var_orbits=var_orbits, sub_orbits=sub_orbits, orbit_mode=orbit_mode, suborbit_mode=suborbit_mode)
+    else:
+        symbreak = symmetry_breaking(F, s, is_mu, vp, var_orbits=var_orbits)
     
     all_clauses += redundant_clauses + symbreak
 
@@ -1694,6 +1716,9 @@ def has_short_proof(F, l, u, is_mu=False, options=Options(), time_limit=None, G=
 
     t_end = perf_counter()
 
+    if query_clauses == None:
+        return None, None, None, 0.0
+
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
     
@@ -1743,6 +1768,9 @@ def count_short_proofs(F, s, is_mu, options):
     t_begin = perf_counter()
     query_clauses, vp, max_orig_var, assumptions = get_query(F, s, is_mu, options.cardnum)
     t_end = perf_counter()
+
+    if query_clauses == None:
+        return None
 
     if options.verbosity >= 1:
         verb_query_end(maxvar(query_clauses), len(query_clauses), size(query_clauses), t_end-t_begin)
@@ -1974,8 +2002,12 @@ def main():
     parser.add_argument("-q", "--quiet",
             action="store_true",
             help="disable additional output")
+    parser.add_argument("--orbit-mode", type=str, default=None)
+    parser.add_argument("--suborbit-mode", type=str, default=None)
+    parser.add_argument("--no-sir", action="store_true", default=False)
 
     options = parser.parse_args()
+    #options.no_sir = True
     
     if options.quiet:
         options.verbosity = 0
@@ -2038,6 +2070,8 @@ def main():
         size, proof_DAG = read_proof_structure(options.cnf + ".proof")
         for i in range(size, size+num_test_cases):
             Q, vp, mvar, assumptions = get_query(F, size, is_mu, options.cardnum, options.ldq, known_lower_bound=l) 
+            if Q == None:
+                break
             s = Solver(name="cadical", bootstrap_with=Q)
             if s.solve(assumptions=assume_proof(proof_DAG, vp)) == False:
                 print(f"query {size} unsatisfiable")
@@ -2047,7 +2081,9 @@ def main():
             print("PASSED")
     elif options.query:
         if options.enc == "traditional":
-            print_formula(get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=l)[0])
+            F = get_query(F, options.query, is_mu, options.cardnum, options.ldq, known_lower_bound=l)[0]
+            if F != None:
+                print_formula(F)
         elif options.enc == "projected":
             print_formula(get_query_abstract(F, G, P, empty_clause, options.query, is_mu, known_lower_bound=options.query)[0])
     elif options.has != None:
